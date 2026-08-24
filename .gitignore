@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Environment
+.env
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Build/cache
+*.log
+.vite/
+
+# VS Code
+.vscode/
+
+# Generated ZIP/patch files
+*.zip
+orbit-frontend-*/
+
+# OS
+.DS_Store
+Thumbs.db
