@@ -272,11 +272,15 @@ class ResearchAgent(BaseAgent):
                 timeout=self.timeout,
             ) as response:
 
-                data = response.read()
+                # Limit read size to avoid extremely large RSS payloads.
+                data = response.read(self.max_download_bytes)
 
-            root = ET.fromstring(
-                data
-            )
+            try:
+                root = ET.fromstring(
+                    data
+                )
+            except Exception:
+                return []
 
             results = []
 
@@ -749,6 +753,14 @@ class ResearchAgent(BaseAgent):
                 ):
                     continue
 
+                # Guard against malformed or non-http(s) schemes.
+                try:
+                    parsed_tmp = urlparse(link)
+                    if parsed_tmp.scheme not in ("http", "https"):
+                        continue
+                except Exception:
+                    continue
+
                 if self.is_blocked_host(
                     link
                 ):
@@ -1086,17 +1098,22 @@ class ResearchAgent(BaseAgent):
 
                 final_url = response.geturl()
 
-            if (
-                final_url
-                and not self.is_google_news_url(
+            try:
+                parsed_final = urlparse(final_url)
+                if (
                     final_url
-                )
-                and not self.is_blocked_host(
-                    final_url
-                )
-            ):
-
-                return final_url
+                    and parsed_final.scheme in ("http","https")
+                    and not self.is_google_news_url(
+                        final_url
+                    )
+                    and not self.is_blocked_host(
+                        final_url
+                    )
+                ):
+                    return final_url
+            except Exception:
+                # If parsing fails, treat as unresolved.
+                return ""
 
         except Exception:
             pass
@@ -1194,6 +1211,14 @@ class ResearchAgent(BaseAgent):
         # ----------------------------------------------------
 
         for candidate_url in candidates:
+
+            # Validate URL parsing and scheme before attempting fetch.
+            try:
+                parsed_candidate = urlparse(candidate_url)
+                if parsed_candidate.scheme not in ("http","https"):
+                    continue
+            except Exception:
+                continue
 
             if self.is_google_news_url(
                 candidate_url
