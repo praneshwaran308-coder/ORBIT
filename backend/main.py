@@ -69,6 +69,18 @@ orchestrator = Orchestrator()
 class TaskRequest(BaseModel):
     task: str
 
+    # Optional dataset path.
+    #
+    # This allows /run to receive a file path when an ML
+    # or DATA task requires a dataset.
+    #
+    # Example:
+    # {
+    #     "task": "Predict salary using the uploaded dataset",
+    #     "file_path": "C:\\Users\\LENOVO\\ORBIT\\data\\uploads\\ml_test_data.csv"
+    # }
+    file_path: str | None = None
+
 
 # ============================================================
 # ROOT
@@ -102,8 +114,17 @@ def health():
 async def run_task(
     request: TaskRequest,
 ):
+    """
+    Run a task through the ORBIT orchestrator.
+
+    Supports both:
+        1. Normal research tasks without a file
+        2. DATA / ML tasks with an optional file_path
+    """
+
     result = await orchestrator.route(
-        request.task
+        request.task,
+        request.file_path,
     )
 
     return result
@@ -142,7 +163,7 @@ async def analyze_dataset(
         }
 
     # --------------------------------------------------------
-    # Build file path
+    # Build safe file path
     # --------------------------------------------------------
 
     file_path = os.path.join(

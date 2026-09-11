@@ -1,0 +1,11 @@
+age,experience,education,salary,level
+22,1,1,25000,Low
+25,2,1,30000,Low
+28,4,2,40000,Medium
+32,7,2,55000,Medium
+35,10,3,70000,High
+40,15,3,90000,High
+23,1,1,27000,Low
+30,5,2,48000,Medium
+38,12,3,80000,High
+45,20,3,110000,High

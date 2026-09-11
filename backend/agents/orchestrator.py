@@ -1,142 +1,205 @@
-import os
 import re
 
-from dotenv import load_dotenv
-
-try:
-    from google import genai
-except ImportError:
-    genai = None
-
-from .research_agent import ResearchAgent
 from .data_agent import DataAgent
 from .ml_agent import MLAgent
+from .research_agent import ResearchAgent
+from .llm_client import OpenRouterClient
 
 
-load_dotenv()
-
+# ============================================================
+# ORBIT ORCHESTRATOR
+# ============================================================
 
 class Orchestrator:
     """
-    ORBIT multi-agent router.
+    ORBIT multi-agent orchestration system.
 
-    Routing priority:
-        1. Explicit ML/modeling request
-        2. Explicit dataset/CSV request
-        3. Research/general-information request
-        4. Optional Gemini fallback
-        5. Graceful failure
+    Agents:
 
-    The deterministic router is intentionally strong enough that common
-    research questions such as "what is an LLM", "whats a llm", "what is RAG",
-    and "latest developments in agentic AI" do not require Gemini.
+        RESEARCH
+        DATA
+        ML
+
+    OpenRouter is used for:
+
+        - Direct general AI questions
+        - AI response generation
+        - Optional intelligent routing
+
+    Deterministic routing is preferred whenever possible.
     """
 
     def __init__(self):
+
+        # ----------------------------------------------------
+        # Specialized agents
+        # ----------------------------------------------------
+
         self.research_agent = ResearchAgent()
         self.data_agent = DataAgent()
         self.ml_agent = MLAgent()
 
-        self.client = None
+        # ----------------------------------------------------
+        # OpenRouter
+        # ----------------------------------------------------
 
-        api_key = os.getenv("GEMINI_API_KEY")
+        try:
+            self.client = OpenRouterClient()
 
-        if api_key and genai is not None:
-            try:
-                self.client = genai.Client(api_key=api_key)
-            except Exception:
+            if not self.client.available:
                 self.client = None
 
-    # ============================================================
-    # NORMALIZATION
-    # ============================================================
+        except Exception:
+            self.client = None
+
+    # =========================================================
+    # HELPER
+    # =========================================================
 
     @staticmethod
-    def normalize_task(task):
-        if not task:
-            return ""
+    def contains_any(
+        text,
+        keywords,
+    ):
+        return any(
+            keyword in text
+            for keyword in keywords
+        )
 
-        task = str(task).lower().strip()
-        task = re.sub(r"\s+", " ", task)
+    # =========================================================
+    # DETECT SIMPLE AI QUESTION
+    # =========================================================
 
-        # Normalize common informal spellings.
-        replacements = {
-            "whats": "what is",
-            "whats": "what is",
-            "what's": "what is",
-            "wht": "what",
-            "pls": "please",
-            "ml/ai": "machine learning ai",
-        }
-
-        for old, new in replacements.items():
-            task = re.sub(rf"\b{re.escape(old)}\b", new, task)
-
-        return task
-
-    # ============================================================
-    # KEYWORD MATCHING
-    # ============================================================
-
-    @staticmethod
-    def contains_any(text, keywords):
-        return any(keyword in text for keyword in keywords)
-
-    # ============================================================
-    # ROUTE DETECTION
-    # ============================================================
-
-    def detect_route(self, task, file_path=None):
+    def is_direct_ai_question(
+        self,
+        task,
+    ):
         """
-        Determine the specialized agent.
+        Detect questions that should go directly to OpenRouter
+        instead of the web Research Agent.
 
-        ML has priority when the user explicitly asks for prediction,
-        training, classification, regression, forecasting, or model
-        evaluation.
+        Examples:
 
-        DATA has priority when the task is about inspecting/analyzing a
-        dataset or CSV without asking the system to build/evaluate a model.
-
-        RESEARCH handles general questions, explanations, current information,
-        technology topics, definitions, comparisons, and unknown natural
-        language tasks when no dataset/modeling intent exists.
+            What is Python?
+            Explain machine learning.
+            What is ORBIT?
+            Explain APIs.
+            How does an LLM work?
         """
 
-        task_lower = self.normalize_task(task)
+        task_lower = str(
+            task or ""
+        ).lower().strip()
 
         if not task_lower:
-            return None
+            return False
 
-        # --------------------------------------------------------
-        # FILE TYPE
-        # --------------------------------------------------------
+        # -----------------------------------------------------
+        # Actual web/current research should NOT be direct AI.
+        # -----------------------------------------------------
+
+        research_only_keywords = [
+            "latest",
+            "current",
+            "today",
+            "recent",
+            "news",
+            "this week",
+            "this month",
+            "research the latest",
+            "find recent",
+            "search the web",
+            "web search",
+            "sources",
+            "articles",
+            "published",
+            "developments",
+            "breaking",
+        ]
+
+        if self.contains_any(
+            task_lower,
+            research_only_keywords,
+        ):
+            return False
+
+        # -----------------------------------------------------
+        # Direct explanatory patterns
+        # -----------------------------------------------------
+
+        direct_patterns = [
+            r"^what\s+is\b",
+            r"^what\s+are\b",
+            r"^what's\b",
+            r"^whats\b",
+            r"^who\s+is\b",
+            r"^why\s+is\b",
+            r"^why\s+are\b",
+            r"^why\s+does\b",
+            r"^why\s+do\b",
+            r"^how\s+does\b",
+            r"^how\s+do\b",
+            r"^how\s+is\b",
+            r"^how\s+are\b",
+            r"^explain\b",
+            r"^define\b",
+            r"^definition\s+of\b",
+            r"^meaning\s+of\b",
+            r"^tell\s+me\s+about\b",
+            r"^describe\b",
+        ]
+
+        if any(
+            re.search(
+                pattern,
+                task_lower,
+            )
+            for pattern in direct_patterns
+        ):
+            return True
+
+        return False
+
+    # =========================================================
+    # DETECT ROUTE
+    # =========================================================
+
+    def detect_route(
+        self,
+        task,
+        file_path=None,
+    ):
+        """
+        Determine which specialized agent should handle the
+        task.
+
+        Returns:
+
+            ML
+            DATA
+            RESEARCH
+            DIRECT_AI
+            None
+        """
+
+        task_lower = str(
+            task or ""
+        ).lower().strip()
 
         is_csv = False
 
         if file_path:
-            is_csv = str(file_path).lower().endswith(".csv")
+            is_csv = str(
+                file_path
+            ).lower().endswith(
+                ".csv"
+            )
 
-        # --------------------------------------------------------
-        # ML REQUESTS
-        # --------------------------------------------------------
+        # =====================================================
+        # ML KEYWORDS
+        # =====================================================
 
         ml_keywords = [
-            "machine learning",
-            "machine-learning",
-            "ml model",
-            "ml models",
-            "train model",
-            "train a model",
-            "train the model",
-            "model training",
-            "model evaluation",
-            "evaluate model",
-            "predict",
-            "prediction",
-            "predicting",
-            "forecast",
-            "forecasting",
-            "regression",
             "classification",
             "classifier",
             "classify",
@@ -158,41 +221,49 @@ class Orchestrator:
             "sales prediction",
         ]
 
-        # These are explicit modeling actions. They should beat DATA.
+        # =====================================================
+        # EXPLICIT ML ACTIONS
+        # =====================================================
+
         ml_action_keywords = [
-            "predict",
-            "prediction",
-            "predicting",
-            "forecast",
-            "forecasting",
-            "train model",
-            "train a model",
-            "train the model",
-            "training",
-            "classify",
-            "classification",
-            "regression",
-            "model evaluation",
-            "evaluate model",
-            "accuracy",
-            "precision",
-            "recall",
-            "f1 score",
-            "f1-score",
-            "r2 score",
-            "mean squared error",
-            "mean absolute error",
-            "mse",
-            "mae",
-            "feature importance",
+"predict",
+"prediction",
+"forecast",
+"train model",
+"train a model",
+"train the model",
+"training model",
+"build model",
+"create model",
+"fit model",
+"classify the",
+"classify this",
+"classify these",
+"evaluate model",
+"calculate accuracy",
+"calculate precision",
+"calculate recall",
+"calculate f1 score",
+"feature importance",
         ]
 
-        has_ml = self.contains_any(task_lower, ml_keywords)
-        has_ml_action = self.contains_any(task_lower, ml_action_keywords)
+        has_ml = self.contains_any(
+            task_lower,
+            ml_keywords,
+        )
 
-        # --------------------------------------------------------
-        # DATA REQUESTS
-        # --------------------------------------------------------
+        has_ml_action = self.contains_any(
+            task_lower,
+            ml_action_keywords,
+        )
+
+        # Explicit modeling operation wins.
+        if has_ml_action:
+            return "ML"
+
+        # =====================================================
+        # DATA
+        # =====================================================
 
         data_keywords = [
             "analyze dataset",
@@ -239,70 +310,88 @@ class Orchestrator:
             "inspect data",
         ]
 
-        has_data = self.contains_any(task_lower, data_keywords)
+        has_data = self.contains_any(
+            task_lower,
+            data_keywords,
+        )
 
-        # Explicit model operation always wins.
-        if has_ml_action:
-            return "ML"
-
-        # CSV/dataset analysis without a model operation goes to DATA.
         if has_data:
             return "DATA"
 
-        # An uploaded CSV with an analysis-like task is DATA.
-        if is_csv and self.contains_any(
-            task_lower,
-            [
-                "analyze",
-                "analyse",
-                "inspect",
-                "explore",
-                "understand",
-                "summarize",
-                "summary",
-                "dataset",
-                "data",
-                "clean",
-                "statistics",
-            ],
+        # =====================================================
+        # CSV + ANALYSIS
+        # =====================================================
+
+        if (
+            is_csv
+            and self.contains_any(
+                task_lower,
+                [
+                    "analyze",
+                    "analyse",
+                    "inspect",
+                    "explore",
+                    "understand",
+                    "summarize",
+                    "summary",
+                    "dataset",
+                    "data",
+                    "clean",
+                    "statistics",
+                ],
+            )
         ):
             return "DATA"
 
-        # --------------------------------------------------------
-        # RESEARCH REQUESTS
-        # --------------------------------------------------------
+        # =====================================================
+        # DIRECT AI
+        # =====================================================
+
+        if self.is_direct_ai_question(
+            task
+        ):
+            return "DIRECT_AI"
+
+        # =====================================================
+        # RESEARCH
+        # =====================================================
 
         research_keywords = [
             "research",
             "latest",
             "current",
             "news",
-            "what is",
-            "what are",
-            "who is",
-            "who are",
-            "how does",
-            "how do",
-            "how can",
-            "why does",
-            "why do",
-            "explain",
-            "compare",
-            "comparison",
-            "information about",
-            "tell me about",
-            "definition",
-            "define",
-            "meaning of",
+            "recent",
+            "today",
+            "this week",
+            "this month",
+            "developments",
+            "breaking",
+            "search the web",
+            "web search",
+            "find recent",
+            "find sources",
+            "articles",
+            "published",
+        ]
 
-            # AI / technology topics commonly sent to Research Agent.
+        if self.contains_any(
+            task_lower,
+            research_keywords,
+        ):
+            return "RESEARCH"
+
+        # =====================================================
+        # AI / TECHNOLOGY
+        # =====================================================
+
+        technology_keywords = [
             "llm",
             "large language model",
             "large language models",
             "generative ai",
             "agentic ai",
             "artificial intelligence",
-            " ai ",
             "machine learning",
             "deep learning",
             "transformer",
@@ -325,61 +414,180 @@ class Orchestrator:
             "technology",
         ]
 
-        if self.contains_any(f" {task_lower} ", research_keywords):
-            return "RESEARCH"
+        if self.contains_any(
+            task_lower,
+            technology_keywords,
+        ):
+            return "DIRECT_AI"
 
-        # Pure ML terminology without a modeling action.
-        # Example: "explain machine learning".
+        # Pure ML terminology without a modeling operation.
         if has_ml:
-            return "RESEARCH"
+            return "DIRECT_AI"
 
-        # --------------------------------------------------------
-        # SAFE DEFAULT
-        # --------------------------------------------------------
-        #
-        # If there is no file and no explicit DATA/ML operation,
-        # treat a normal natural-language task as research instead
-        # of returning "none". This fixes tasks such as:
-        #   "whats a llm"
-        #   "tell me about transformers"
-        #   "why is AI important"
-        #
+        # =====================================================
+        # GENERAL TASK
+        # =====================================================
+
         if not file_path:
-            return "RESEARCH"
+            return "DIRECT_AI"
 
         return None
 
-    # ============================================================
-    # RUN SELECTED AGENT
-    # ============================================================
+    # =========================================================
+    # DIRECT OPENROUTER RESPONSE
+    # =========================================================
 
-    async def run_agent(self, decision, task, file_path=None):
+    async def direct_ai(
+        self,
+        task,
+    ):
+        """
+        Send a normal AI question directly to OpenRouter.
+        """
+
+        if self.client is None:
+
+            return {
+                "agent": "OpenRouter AI",
+                "task": task,
+                "status": "unavailable",
+                "ai_status": "unavailable",
+                "result": (
+                    "OpenRouter is not configured."
+                ),
+            }
+
+        system_prompt = """
+You are ORBIT's AI assistant.
+
+ORBIT means:
+
+Real-Time Multi-Agent AI Orchestration Platform.
+
+ORBIT is a software platform that coordinates multiple
+specialized AI agents, including Research, Data Analysis,
+and Machine Learning agents.
+
+When the user asks what ORBIT is, they are referring to
+this ORBIT platform unless the user explicitly specifies
+another meaning.
+
+Answer the user's question directly.
+
+Rules:
+- Be accurate.
+- Do not invent ORBIT features.
+- Be concise when the user requests a short answer.
+- Do not mention internal routing.
+- Do not mention OpenRouter.
+- Do not output safety classifications.
+- Return only the answer.
+"""
+
+        try:
+
+            response = await self.client.complete(
+                task,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=2048,
+            )
+
+            response = str(
+                response or ""
+            ).strip()
+
+            if not response:
+                raise RuntimeError(
+                    "OpenRouter returned an empty response."
+                )
+
+            return {
+                "agent": "OpenRouter AI",
+                "task": task,
+                "status": "completed",
+                "ai_status": "completed",
+                "ai_model": getattr(
+                    self.client,
+                    "model",
+                    "openrouter/free",
+                ),
+                "result": response,
+            }
+
+        except Exception as error:
+
+            return {
+                "agent": "OpenRouter AI",
+                "task": task,
+                "status": "error",
+                "ai_status": "error",
+                "result": (
+                    "ORBIT AI could not generate "
+                    "a response."
+                ),
+                "error": str(error),
+            }
+
+    # =========================================================
+    # RUN SPECIALIZED AGENT
+    # =========================================================
+
+    async def run_agent(
+        self,
+        decision,
+        task,
+        file_path=None,
+    ):
+
         if decision == "ML":
-            return await self.ml_agent.run(task, file_path)
+
+            return await self.ml_agent.run(
+                task,
+                file_path,
+            )
 
         if decision == "DATA":
-            return await self.data_agent.run(task, file_path)
+
+            return await self.data_agent.run(
+                task,
+                file_path,
+            )
 
         if decision == "RESEARCH":
-            return await self.research_agent.run(task)
+
+            return await self.research_agent.run(
+                task,
+            )
+
+        if decision == "DIRECT_AI":
+
+            return await self.direct_ai(
+                task,
+            )
 
         return {
             "agent": "Orchestrator",
             "task": task,
             "status": "not_routed",
-            "result": "No specialized agent was selected.",
+            "result": (
+                "No specialized agent "
+                "was selected."
+            ),
         }
 
-    # ============================================================
-    # OPTIONAL GEMINI ROUTER
-    # ============================================================
+    # =========================================================
+    # OPENROUTER ROUTING FALLBACK
+    # =========================================================
 
-    async def ai_route(self, task):
+    async def ai_route(
+        self,
+        task,
+    ):
         """
-        Optional Gemini fallback.
+        OpenRouter fallback routing.
 
-        Deterministic routing is used first, so normal research questions
-        do not depend on Gemini.
+        Used only when deterministic routing cannot decide.
         """
 
         if self.client is None:
@@ -388,63 +596,80 @@ class Orchestrator:
         prompt = f"""
 You are the routing component of ORBIT.
 
-Choose exactly one agent for this task.
+ORBIT is a Real-Time Multi-Agent AI Orchestration Platform.
+
+Choose exactly ONE agent.
 
 RESEARCH:
-- General questions
-- Definitions and explanations
-- Current information and news
-- Technology research
-- AI/LLM/RAG/agentic AI questions
+Use for current information, latest news, recent events,
+web research, sources, or article-based questions.
 
 DATA:
-- CSV or dataset analysis
-- Statistics
-- Data cleaning
-- Correlations
-- Missing values
-- EDA
+Use for CSV/dataset analysis, statistics, cleaning,
+correlations, missing values, and EDA.
 
 ML:
-- Prediction
-- Forecasting
-- Classification
-- Regression
-- Model training
-- Model evaluation
+Use for prediction, forecasting, classification,
+regression, model training, or model evaluation.
+
+DIRECT_AI:
+Use for ordinary questions, explanations, definitions,
+coding concepts, general knowledge, and conversational AI.
 
 TASK:
 {task}
 
-Return only:
+Return ONLY:
+
 RESEARCH
 DATA
-or
 ML
+or
+DIRECT_AI
 """
 
         try:
-            response = self.client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt,
+
+            response = await self.client.complete(
+                prompt,
+                temperature=0.0,
+                max_tokens=20,
             )
 
             decision = str(
-                getattr(response, "text", "")
+                response or ""
             ).strip().upper()
 
-            # Exact match first.
-            if decision in {"RESEARCH", "DATA", "ML"}:
+            if decision in {
+                "RESEARCH",
+                "DATA",
+                "ML",
+                "DIRECT_AI",
+            }:
                 return decision
 
-            # Then tolerate extra explanatory text.
-            if re.search(r"\bRESEARCH\b", decision):
+            if re.search(
+                r"\bDIRECT_AI\b",
+                decision,
+            ):
+                return "DIRECT_AI"
+
+            if re.search(
+                r"\bRESEARCH\b",
+                decision,
+            ):
                 return "RESEARCH"
 
-            if re.search(r"\bDATA\b", decision):
+            if re.search(
+                r"\bDATA\b",
+                decision,
+            ):
                 return "DATA"
 
-            if re.search(r"\bML\b", decision):
+            if re.search(
+                r"\bML\b",
+                decision,
+            ):
                 return "ML"
 
         except Exception:
@@ -452,19 +677,39 @@ ML
 
         return None
 
-    # ============================================================
-    # MAIN ROUTER
-    # ============================================================
+    # =========================================================
+    # MAIN ROUTE
+    # =========================================================
 
-    async def route(self, task, file_path=None):
+    async def route(
+        self,
+        task,
+        file_path=None,
+    ):
         """
-        Main ORBIT routing pipeline.
+        Main ORBIT pipeline.
 
-        Deterministic routing is deliberately first.
-        Gemini is only a fallback.
+        User
+          ↓
+        Deterministic router
+          ↓
+        ┌───────────────┬──────────────┬─────────────┐
+        │               │              │             │
+        AI          Research         Data           ML
+        │               │              │             │
+        └───────────────┴──────────────┴─────────────┘
+                          ↓
+                       Response
         """
 
-        if not task or not str(task).strip():
+        # =====================================================
+        # VALIDATE
+        # =====================================================
+
+        if not task or not str(
+            task
+        ).strip():
+
             return {
                 "agent": "Orchestrator",
                 "task": task,
@@ -473,81 +718,101 @@ ML
                     "method": "none",
                     "agent": "ORCHESTRATOR",
                 },
-                "result": "Please provide a task for ORBIT.",
+                "result": (
+                    "Please provide a task "
+                    "for ORBIT."
+                ),
             }
 
-        task = str(task).strip()
+        task = str(
+            task
+        ).strip()
 
-        # --------------------------------------------------------
-        # STEP 1: DETERMINISTIC ROUTING
-        # --------------------------------------------------------
+        # =====================================================
+        # STEP 1
+        # DETERMINISTIC ROUTING
+        # =====================================================
 
-        decision = self.detect_route(task, file_path)
+        decision = self.detect_route(
+            task,
+            file_path,
+        )
 
-        if decision:
-            result = await self.run_agent(
-                decision,
-                task,
-                file_path,
+        routing_method = "deterministic"
+
+        # =====================================================
+        # STEP 2
+        # OPENROUTER FALLBACK
+        # =====================================================
+
+        if not decision:
+
+            decision = await self.ai_route(
+                task
             )
 
-            if not isinstance(result, dict):
-                result = {
-                    "agent": decision,
-                    "task": task,
-                    "status": "completed",
-                    "result": str(result),
-                }
+            routing_method = "openrouter"
 
-            result["routing"] = {
-                "method": "deterministic",
-                "agent": decision,
+        # =====================================================
+        # FAILURE
+        # =====================================================
+
+        if not decision:
+
+            return {
+                "agent": "Orchestrator",
+                "task": task,
+                "status": "not_routed",
+                "ai_status": "unavailable",
+                "routing": {
+                    "method": "none",
+                    "agent": "ORCHESTRATOR",
+                },
+                "result": (
+                    "ORBIT could not determine "
+                    "the appropriate agent."
+                ),
             }
 
-            return result
+        # =====================================================
+        # STEP 3
+        # RUN AGENT
+        # =====================================================
 
-        # --------------------------------------------------------
-        # STEP 2: OPTIONAL GEMINI FALLBACK
-        # --------------------------------------------------------
+        result = await self.run_agent(
+            decision,
+            task,
+            file_path,
+        )
 
-        decision = await self.ai_route(task)
+        if not isinstance(
+            result,
+            dict,
+        ):
 
-        if decision:
-            result = await self.run_agent(
-                decision,
-                task,
-                file_path,
-            )
-
-            if not isinstance(result, dict):
-                result = {
-                    "agent": decision,
-                    "task": task,
-                    "status": "completed",
-                    "result": str(result),
-                }
-
-            result["routing"] = {
-                "method": "gemini",
+            result = {
                 "agent": decision,
+                "task": task,
+                "status": "completed",
+                "result": str(
+                    result
+                ),
             }
 
-            return result
+        # =====================================================
+        # ROUTING METADATA
+        # =====================================================
 
-        # --------------------------------------------------------
-        # STEP 3: GRACEFUL FAILURE
-        # --------------------------------------------------------
-
-        return {
-            "agent": "Orchestrator",
-            "task": task,
-            "status": "not_routed",
-            "routing": {
-                "method": "none",
-                "agent": "ORCHESTRATOR",
-            },
-            "result": (
-                "ORBIT could not determine the appropriate agent "
-                "for this task."
-            ),
+        result["routing"] = {
+            "method": routing_method,
+            "agent": decision,
         }
+
+        return result
+
+
+# ============================================================
+# GLOBAL ORCHESTRATOR
+# ============================================================
+
+orchestrator = Orchestrator()
