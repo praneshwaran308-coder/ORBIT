@@ -946,6 +946,20 @@ class ResearchAgent(BaseAgent):
         if not path or path == "/":
             return False
 
+        path_parts = [part for part in path.strip("/").split("/") if part]
+        section_names = {
+            "business", "technology", "tech", "latest", "news",
+            "topic", "topics", "category", "categories",
+            "section", "sections", "channel", "channels",
+            "tag", "tags", "functional-safety"
+        }
+
+        if any(part in section_names for part in path_parts) and len(path_parts) <= 2:
+            return False
+
+        if len(path_parts) == 1 and len(path_parts[0]) < 35:
+            return False
+
         return True
 
     def _score_candidate_url(
@@ -1277,6 +1291,216 @@ class ResearchAgent(BaseAgent):
 
         return ""
 
+    def _find_nature_article(self, title: str) -> str:
+        """Discover a Nature article through Crossref DOI metadata."""
+        import requests
+
+        try:
+            response = requests.get(
+                "https://api.crossref.org/works",
+                params={
+                    "query.title": title,
+                    "rows": 10,
+                    "select": "DOI,title,type",
+                },
+                headers={
+                    "User-Agent": "ORBIT research resolver/1.0"
+                },
+                timeout=8,
+            )
+
+            if not response.ok:
+                return ""
+
+            items = response.json().get("message", {}).get("items", [])
+
+            target = self.clean_text(title).lower()
+
+            for item in items:
+                doi = self.clean_text(item.get("DOI", ""))
+                titles = item.get("title") or []
+
+                if not doi or not titles:
+                    continue
+
+                candidate_title = self.clean_text(titles[0])
+
+                # Require strong title overlap before accepting the DOI.
+                target_words = {
+                    w for w in re.findall(r"[a-z0-9]+", target)
+                    if len(w) > 2
+                }
+                candidate_words = {
+                    w for w in re.findall(
+                        r"[a-z0-9]+",
+                        candidate_title.lower()
+                    )
+                    if len(w) > 2
+                }
+
+                if not target_words:
+                    continue
+
+                overlap = len(target_words & candidate_words) / len(target_words)
+
+                if overlap < 0.75:
+                    continue
+
+                url = "https://doi.org/" + doi
+
+                if not self._is_usable_article_candidate(url):
+                    continue
+
+                try:
+                    article = self.fetch_article(url)
+                except Exception:
+                    continue
+
+                if article and self.article_matches_source(
+                    article,
+                    title,
+                    "Nature",
+                ):
+                    return url
+
+        except Exception:
+            pass
+
+        return ""
+
+
+    def _find_wttw_article(self, title: str) -> str:
+        """Discover a WTTW article through Google web search."""
+        import requests
+
+        query = f'"{title}" site:news.wttw.com'
+
+        try:
+            response = requests.get(
+                "https://www.google.com/search",
+                params={"q": query, "num": 10},
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 Chrome/142.0 Safari/537.36"
+                    )
+                },
+                timeout=8,
+            )
+
+            if not response.ok:
+                return ""
+
+            links = re.findall(
+                r"""href=["'](https?://[^"']+)["']""",
+                response.text,
+                flags=re.I,
+            )
+
+            seen = set()
+
+            for candidate in links:
+                candidate = candidate.replace("&amp;", "&")
+
+                if candidate in seen:
+                    continue
+
+                seen.add(candidate)
+
+                parsed = urlparse(candidate)
+                host = (parsed.netloc or "").lower().split(":")[0]
+
+                if host.startswith("www."):
+                    host = host[4:]
+
+                if host != "news.wttw.com":
+                    continue
+
+                if not self._is_usable_article_candidate(candidate):
+                    continue
+
+                try:
+                    article = self.fetch_article(candidate)
+                except Exception:
+                    continue
+
+                if article and self.article_matches_source(
+                    article, title, "WTTW News"
+                ):
+                    return candidate
+
+        except Exception:
+            pass
+
+        return ""
+
+
+    def _find_capitol_news_illinois_article(self, title: str) -> str:
+        """Discover Capitol News Illinois articles through Google."""
+        import requests
+
+        query = f'"{title}" site:capitolnewsillinois.com'
+
+        try:
+            response = requests.get(
+                "https://www.google.com/search",
+                params={"q": query, "num": 10},
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 Chrome/142.0 Safari/537.36"
+                    )
+                },
+                timeout=8,
+            )
+
+            if not response.ok:
+                return ""
+
+            links = re.findall(
+                r"""href=["'](https?://[^"']+)["']""",
+                response.text,
+                flags=re.I,
+            )
+
+            seen = set()
+
+            for candidate in links:
+                candidate = candidate.replace("&amp;", "&")
+
+                if candidate in seen:
+                    continue
+
+                seen.add(candidate)
+
+                parsed = urlparse(candidate)
+                host = (parsed.netloc or "").lower().split(":")[0]
+
+                if host.startswith("www."):
+                    host = host[4:]
+
+                if host != "capitolnewsillinois.com":
+                    continue
+
+                if not self._is_usable_article_candidate(candidate):
+                    continue
+
+                try:
+                    article = self.fetch_article(candidate)
+                except Exception:
+                    continue
+
+                if article and self.article_matches_source(
+                    article, title, "Capitol News Illinois"
+                ):
+                    return candidate
+
+        except Exception:
+            pass
+
+        return ""
+
+
     def find_publisher_article(self, title: str, source: str = "", source_url: str = "") -> str:
         """
         Resolve a Google News result to the real publisher article.
@@ -1293,6 +1517,67 @@ class ResearchAgent(BaseAgent):
         title = self.clean_text(title)
         source = self.clean_text(source)
         source_url = self.clean_text(source_url)
+
+        # ------------------------------------------------------------------
+        # Publisher-specific discovery
+        # ------------------------------------------------------------------
+        # These publishers do not expose a consistently usable generic
+        # /search endpoint, so use their stable public discovery mechanisms.
+        
+        source_low = source.lower()
+
+        # Nature: search Nature's public site and DOI infrastructure.
+        if "nature" in source_low:
+            try:
+                nature_candidate = self._find_nature_article(title)
+                if (
+                    nature_candidate
+                    and self._is_usable_article_candidate(nature_candidate)
+                ):
+                    article = self.fetch_article(nature_candidate)
+                    if article and self.article_matches_source(
+                        article, title, source
+                    ):
+                        return nature_candidate
+            except Exception:
+                pass
+
+        # WTTW: their search endpoint redirects to /search/node, while
+        # article pages themselves are directly fetchable. Use Google web
+        # discovery and validate every resulting publisher URL.
+        if "wttw" in source_low:
+            try:
+                wttw_candidate = self._find_wttw_article(title)
+                if (
+                    wttw_candidate
+                    and self._is_usable_article_candidate(wttw_candidate)
+                ):
+                    article = self.fetch_article(wttw_candidate)
+                    if article and self.article_matches_source(
+                        article, title, source
+                    ):
+                        return wttw_candidate
+            except Exception:
+                pass
+
+        # Capitol News Illinois: use external web discovery because its
+        # public search endpoint is unreliable from automated clients.
+        if "capitol news illinois" in source_low:
+            try:
+                capitol_candidate = self._find_capitol_news_illinois_article(
+                    title
+                )
+                if (
+                    capitol_candidate
+                    and self._is_usable_article_candidate(capitol_candidate)
+                ):
+                    article = self.fetch_article(capitol_candidate)
+                    if article and self.article_matches_source(
+                        article, title, source
+                    ):
+                        return capitol_candidate
+            except Exception:
+                pass
 
         # SiliconANGLE has a reliable WordPress API resolver.
         if "siliconangle" in source.lower():
@@ -2458,7 +2743,7 @@ class ResearchAgent(BaseAgent):
                         candidate = asyncio.run(
                             asyncio.wait_for(
                                 fallback_future,
-                                timeout=5,
+                                timeout=12,
                             )
                         )
 
@@ -2856,6 +3141,7 @@ class ResearchAgent(BaseAgent):
             return self.build_result(
                 task,
                 findings,
+                enriched_sources=enriched_sources,
             )
 
         except Exception as error:
@@ -3054,4 +3340,5 @@ class ResearchAgent(BaseAgent):
             "source_count": 0,
             "articles_read": 0,
         }
+
 
