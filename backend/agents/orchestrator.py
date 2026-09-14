@@ -3,7 +3,7 @@ import re
 from .data_agent import DataAgent
 from .ml_agent import MLAgent
 from .research_agent import ResearchAgent
-from .llm_client import OpenRouterClient
+from .llm_client import OpenRouterClient, LLMFallbackManager
 
 
 # ============================================================
@@ -29,7 +29,7 @@ class Orchestrator:
     Deterministic routing is preferred whenever possible.
     """
 
-    def __init__(self):
+    def __init__(self, registry=None):
 
         # ----------------------------------------------------
         # Specialized agents
@@ -44,13 +44,19 @@ class Orchestrator:
         # ----------------------------------------------------
 
         try:
-            self.client = OpenRouterClient()
+            self.client = LLMFallbackManager()
 
             if not self.client.available:
                 self.client = None
 
         except Exception:
             self.client = None
+
+        # ----------------------------------------------------
+        # Task registry for tracking execution state
+        # ----------------------------------------------------
+        from ..registry import TaskRegistry
+        self.registry = registry if registry is not None else TaskRegistry()
 
     # =========================================================
     # HELPER
@@ -448,7 +454,7 @@ class Orchestrator:
         if self.client is None:
 
             return {
-                "agent": "OpenRouter AI",
+                "agent": "AI Assistant",
                 "task": task,
                 "status": "unavailable",
                 "ai_status": "unavailable",
@@ -503,10 +509,12 @@ Rules:
                 )
 
             return {
-                "agent": "OpenRouter AI",
+                "agent": "AI Assistant",
                 "task": task,
                 "status": "completed",
                 "ai_status": "completed",
+                "ai_provider": getattr(self.client, "provider_name", "Unknown"),
+                "ai_provider": getattr(self.client, "provider_name", "Unknown"),
                 "ai_model": getattr(
                     self.client,
                     "model",
@@ -518,7 +526,7 @@ Rules:
         except Exception as error:
 
             return {
-                "agent": "OpenRouter AI",
+                "agent": "AI Assistant",
                 "task": task,
                 "status": "error",
                 "ai_status": "error",
@@ -811,8 +819,27 @@ DIRECT_AI
         return result
 
 
+    async def execute_task(self, task_id: str, task: str, file_path: str | None = None):
+        """
+        Execute a task asynchronously, updating the TaskRegistry.
+        """
+        # Mark task as running
+        self.registry.update_task(task_id, status="running")
+        self.registry.add_activity(task_id, f"Task started: {task}")
+
+        try:
+            result = await self.route(task, file_path)
+            # Store result
+            self.registry.set_result(task_id, result)
+            self.registry.add_activity(task_id, "Task completed")
+        except Exception as e:
+            # Record error
+            self.registry.set_error(task_id, str(e))
+            self.registry.add_activity(task_id, f"Task failed: {e}")
+
 # ============================================================
 # GLOBAL ORCHESTRATOR
 # ============================================================
 
 orchestrator = Orchestrator()
+

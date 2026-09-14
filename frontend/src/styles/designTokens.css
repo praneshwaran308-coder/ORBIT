@@ -1,0 +1,41 @@
+/* src/styles/designTokens.css */
+:root {
+  /* Core palette */
+  --color-bg-base: #0a0a0a; /* deep near‑black */
+  --color-surface: #1f1f1f; /* primary surface */
+  --color-surface-elevated: #262626; /* slightly elevated */
+  --color-surface-container-low: #141c24; /* low container */
+  --color-surface-container: #182028; /* regular container */
+  --color-surface-container-high: #222b33; /* higher container */
+  --color-accent: #00a3a3; /* teal accent */
+
+  /* Semantic colors */
+  --color-success: #28a745;
+  --color-warning: #ffc107;
+  --color-error: #dc3545;
+
+  /* Border and divider */
+  --color-border: rgba(255, 255, 255, 0.08);
+
+  /* Spacing – 4 px base */
+  --space-1: 0.25rem;   /* 4px */
+  --space-2: 0.5rem;    /* 8px */
+  --space-3: 0.75rem;   /* 12px */
+  --space-4: 1rem;      /* 16px */
+  --space-5: 1.5rem;    /* 24px */
+  --space-6: 2rem;      /* 32px */
+
+  /* Border radius – restrained */
+  --radius-sm: 0.125rem;   /* 2px */
+  --radius-md: 0.25rem;    /* 4px */
+  --radius-lg: 0.5rem;     /* 8px */
+}
+
+/* Utility classes for quick use */
+.bg-base { @apply bg-[var(--color-bg-base)]; }
+.bg-surface { @apply bg-[var(--color-surface)]; }
+.bg-surface-elevated { @apply bg-[var(--color-surface-elevated)]; }
+.border-subtle { @apply border border-[var(--color-border)]; }
+.rounded-sm { @apply rounded-[var(--radius-sm)]; }
+.rounded-md { @apply rounded-[var(--radius-md)]; }
+.rounded-lg { @apply rounded-[var(--radius-lg)]; }

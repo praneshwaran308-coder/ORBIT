@@ -244,7 +244,7 @@ class ResearchAgent(BaseAgent):
     def search_web(
         self,
         query: str,
-        limit: int = 6,
+        limit: int = 12,
     ) -> list:
 
         """
@@ -945,6 +945,11 @@ class ResearchAgent(BaseAgent):
 
         if not path or path == "/":
             return False
+
+        # DOI links are legitimate article identifiers and may have
+        # relatively short paths such as /10.1038/xxxxxx.
+        if host == "doi.org":
+            return True
 
         path_parts = [part for part in path.strip("/").split("/") if part]
         section_names = {
@@ -2678,134 +2683,22 @@ class ResearchAgent(BaseAgent):
         task: str,
     ) -> list:
         """
-        Enrich research candidates without requiring every publisher
-        to expose a directly fetchable article.
+        Fast research enrichment.
 
-        Evidence levels:
-        - article: directly fetched and validated article
-        - rss_description: search/RSS description used as evidence
+        Uses the RSS/search metadata already returned by Google News.
+        Avoids publisher discovery so interactive research stays fast.
         """
 
-        selected = sources[:12]
+        selected = sources[:8]
 
         def process_source(source):
             try:
                 title = (source.get("title") or "").strip()
-                source_name = (source.get("source") or "").strip()
                 original_url = (source.get("url") or "").strip()
                 description = self.clean_text(
                     source.get("description") or ""
                 )
 
-                resolved_url = ""
-                article_text = ""
-
-                # ------------------------------------------------
-                # 1. Try resolving the news URL.
-                # ------------------------------------------------
-                if original_url:
-                    try:
-                        candidate = self.resolve_url(original_url)
-
-                        if (
-                            candidate
-                            and "news.google.com" not in candidate.lower()
-                            and "bing.com/news" not in candidate.lower()
-                            and "auth." not in candidate.lower()
-                            and "/auth/" not in candidate.lower()
-                            and "/search" not in candidate.lower()
-                            and "search?" not in candidate.lower()
-                            and "login" not in candidate.lower()
-                            and "signin" not in candidate.lower()
-                        ):
-                            resolved_url = candidate
-                    except Exception:
-                        pass
-
-                # ------------------------------------------------
-                # 1b. Publisher-aware fallback.
-                # ------------------------------------------------
-                # Google News frequently leaves us with a redirect URL.
-                # If direct resolution fails, ask the existing publisher
-                # resolver to locate the article from its title/source.
-                if not resolved_url and title:
-                    try:
-                        # Publisher fallback is potentially network-heavy.
-                        # Run it in a bounded worker so one publisher cannot
-                        # stall the entire research pipeline.
-                        fallback_future = asyncio.to_thread(
-                            self.find_publisher_article,
-                            title,
-                            source_name,
-                            source.get("source_url", ""),
-                        )
-
-                        candidate = asyncio.run(
-                            asyncio.wait_for(
-                                fallback_future,
-                                timeout=12,
-                            )
-                        )
-
-                        if (
-                            candidate
-                            and "news.google.com" not in candidate.lower()
-                            and "bing.com/news" not in candidate.lower()
-                        ):
-                            resolved_url = candidate
-
-                    except Exception:
-                        # Resolver failure/timeout must never block enrichment.
-                        pass
-
-                # ------------------------------------------------
-                # 2. Try direct article extraction.
-                # ------------------------------------------------
-                if resolved_url:
-                    try:
-                        article_text = self.fetch_article(
-                            resolved_url
-                        )
-                    except Exception:
-                        article_text = ""
-
-                if article_text:
-                    try:
-                        valid = self.article_matches_source(
-                            article_text,
-                            title,
-                            source_name,
-                        )
-                    except Exception:
-                        valid = False
-
-                    if valid:
-                        summary = self.summarize_article(
-                            article_text,
-                            task,
-                        )
-
-                        if summary:
-                            enriched = source.copy()
-                            enriched["search_url"] = original_url
-                            enriched["url"] = resolved_url
-                            enriched["article_available"] = True
-                            enriched["article_valid"] = True
-                            enriched["evidence_type"] = "article"
-                            enriched["article_length"] = len(
-                                article_text
-                            )
-                            enriched["summary"] = summary
-                            enriched["finding"] = summary
-                            return enriched
-
-                # ------------------------------------------------
-                # 3. Honest RSS/search evidence fallback.
-                # ------------------------------------------------
-                #
-                # The description came from the search result itself.
-                # It is NOT labelled as a fetched article.
-                #
                 if (
                     description
                     and len(description) >= 40
@@ -2813,9 +2706,7 @@ class ResearchAgent(BaseAgent):
                 ):
                     enriched = source.copy()
                     enriched["search_url"] = original_url
-                    enriched["url"] = (
-                        resolved_url or original_url
-                    )
+                    enriched["url"] = original_url
                     enriched["article_available"] = False
                     enriched["article_valid"] = False
                     enriched["evidence_type"] = "rss_description"
@@ -3056,7 +2947,7 @@ class ResearchAgent(BaseAgent):
                     await asyncio.to_thread(
                         self.search_web,
                         query,
-                        6,
+                        12,
                     )
                 )
 
@@ -3066,7 +2957,7 @@ class ResearchAgent(BaseAgent):
 
                 if len(
                     all_sources
-                ) >= 8:
+                ) >= 24:
                     break
 
             if not all_sources:

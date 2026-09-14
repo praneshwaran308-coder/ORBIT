@@ -1,11 +1,13 @@
 import os
 import shutil
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
+from .settings import settings
 
 from .agents.orchestrator import Orchestrator
+from .registry import TaskRegistry
 
 
 # ============================================================
@@ -30,28 +32,22 @@ app = FastAPI(
 # development ports.
 #
 
+# Dynamically configure allowed origins for local development.
+# Reads from the ORIGINS environment variable (comma‑separated URLs).
+# Falls back to the common Vite development ports if not set.
+import os
+origins_env = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175",
+)
+allow_origins = [origin.strip() for origin in origins_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:5175",
-    ],
-
+    allow_origins=allow_origins,
     allow_credentials=True,
-
-    allow_methods=[
-        "*"
-    ],
-
-    allow_headers=[
-        "*"
-    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -59,7 +55,7 @@ app.add_middleware(
 # ORCHESTRATOR
 # ============================================================
 
-orchestrator = Orchestrator()
+orchestrator = Orchestrator(registry=TaskRegistry())
 
 
 # ============================================================
@@ -68,18 +64,33 @@ orchestrator = Orchestrator()
 
 class TaskRequest(BaseModel):
     task: str
-
-    # Optional dataset path.
-    #
-    # This allows /run to receive a file path when an ML
-    # or DATA task requires a dataset.
-    #
-    # Example:
-    # {
-    #     "task": "Predict salary using the uploaded dataset",
-    #     "file_path": "C:\\Users\\LENOVO\\ORBIT\\data\\uploads\\ml_test_data.csv"
-    # }
     file_path: str | None = None
+
+    @validator('task')
+    def validate_task(cls, v: str) -> str:
+        """Ensure the task string is non‑empty and not just whitespace, and enforce a length limit.
+
+        The backend should reject empty or whitespace‑only tasks and overly long inputs.
+        """
+        if v is None:
+            raise ValueError('Task must be provided')
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError('Task cannot be empty or whitespace')
+        max_length = 1024
+        if len(stripped) > max_length:
+            raise ValueError(f'Task exceeds maximum length of {max_length} characters')
+        return stripped
+
+    @validator('file_path')
+    def validate_file_path(cls, v: str | None) -> str | None:
+        """Optional validation for file_path – ensure it is a non‑empty string when provided.
+        """
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError('file_path cannot be empty or whitespace')
+        return v
 
 
 # ============================================================
@@ -110,6 +121,8 @@ def health():
 # RUN TASK
 # ============================================================
 
+import asyncio
+
 @app.post("/run")
 async def run_task(
     request: TaskRequest,
@@ -122,12 +135,22 @@ async def run_task(
         2. DATA / ML tasks with an optional file_path
     """
 
-    result = await orchestrator.route(
-        request.task,
-        request.file_path,
+    # Create a new task entry in the registry and obtain a task ID
+    task_id = orchestrator.registry.create_task(request.task)
+    # Dispatch background execution
+    asyncio.create_task(
+        orchestrator.execute_task(task_id, request.task, request.file_path)
     )
+    # Return the task identifier to the client for polling
+    return {"task_id": task_id, "status": "queued"}
 
-    return result
+@app.get("/status/{task_id}")
+async def get_status(task_id: str):
+    """Retrieve the current status and details of a task by its ID."""
+    task = orchestrator.registry.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
 
 
 # ============================================================

@@ -5,6 +5,8 @@ __pycache__/
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # Node
 node_modules/
@@ -25,3 +27,15 @@ orbit-frontend-*/
 # OS
 .DS_Store
 Thumbs.db
+
+# Production deployment exclusions
+scratch/
+# temporary screenshots (e.g., *.png generated during testing)
+*.png
+# debug artifacts (e.g., logs, dump files)
+*.log
+# browser binaries (e.g., Chrome, Chromium executables)
+*.exe
+*.dll
+*.so
+*.dylib

@@ -1,0 +1,62 @@
+/* src/styles/typography.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+/* Base type scales */
+.text-display {
+  font-family: 'Inter', sans-serif;
+  font-size: 32px;
+  line-height: 38px;
+  font-weight: 600;
+}
+.text-heading-lg {
+  font-family: 'Inter', sans-serif;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+}
+.text-heading-md {
+  font-family: 'Inter', sans-serif;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+.text-heading-sm {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.text-body-lg {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.text-body-md {
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 400;
+}
+.text-body-sm {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+}
+/* New utility classes for smaller text and label styling */
+.font-body-xs {
+  @apply font-sans text-[11px] leading-[14px];
+}
+.font-body-sm {
+  @apply text-body-sm;
+}
+.font-label-sm {
+  @apply font-sans text-[10px] leading-[14px] uppercase tracking-wider text-outline;
+}
+.text-mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 400;
+}

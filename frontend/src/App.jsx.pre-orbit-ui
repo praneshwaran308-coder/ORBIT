@@ -1,0 +1,1420 @@
+import { useRef, useState, useEffect } from "react";
+import "./App.css";
+
+const API_URL = "http://127.0.0.1:8000";
+
+const agents = [
+  ["Research Agent", "R", "Grounded research and source validation"],
+  ["Data Agent", "D", "CSV analysis, statistics, and insights"],
+  ["ML Agent", "M", "Training, evaluation, and predictions"],
+];
+
+const formatNumber = (value, digits = 2) => {
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number.toLocaleString(undefined, {
+        maximumFractionDigits: digits,
+      })
+    : "Ã¢â‚¬â€";
+};
+
+const formatStatus = (status) => {
+  const value = String(status || "completed").replaceAll("_", " ");
+
+  if (["error", "failed"].includes(String(status).toLowerCase())) {
+    return { label: value, tone: "error" };
+  }
+
+  if (
+    [
+      "waiting_for_file",
+      "insufficient_data",
+      "invalid_dataset",
+      "target_required",
+    ].includes(status)
+  ) {
+    return { label: value, tone: "warning" };
+  }
+
+  return { label: value, tone: "success" };
+};
+
+const getGroundingLabel = (grounding) => {
+  if (grounding === true) return "Available";
+  if (typeof grounding === "object" && grounding !== null) {
+    return grounding.enabled ? "Available" : "Unavailable";
+  }
+
+  return [
+    "available",
+    "enabled",
+    "google_search",
+    "google_news_rss",
+  ].includes(grounding)
+    ? "Available"
+    : "Unavailable";
+};
+
+// Text sanitization helpers to remove common web extraction noise while preserving content
+function stripHtmlTags(input) {
+  if (!input) return "";
+  return String(input).replace(/<[^>]+>/g, "");
+}
+
+function sanitizeText(input) {
+  if (!input && input !== 0) return "";
+  let text = String(input);
+  // Remove HTML remnants
+  text = stripHtmlTags(text);
+  // Remove common navigation noise
+  text = text.replace(/skip to (main|content)/gi, "");
+  text = text.replace(/^\s*-+\s*|\s*-+\s*$/g, "");
+  // Normalize pipe separators (remove or soften noisy site suffixes)
+  text = text.replace(/\s*\|\s*/g, " Ã¢â‚¬â€ ");
+  // Collapse multiple punctuation or separators (en dash/em dash/hyphen)
+  text = text.replace(/[\u2013\u2014-]{2,}/g, "Ã¢â‚¬â€");
+  // Remove repeated short fragments like "Home" often introduced by scrapers
+  if (/^home\b/i.test(text)) text = text.replace(/^home\b[\s:-]*/i, "");
+  // Trim and collapse whitespace
+  text = text.replace(/\s+/g, " ").trim();
+  // Remove leading/trailing separators (pipe, dash, em-dash, colon, whitespace)
+  text = text.replace(/^[|Ã¢â‚¬â€:\s-]+|[|Ã¢â‚¬â€:\s-]+$/g, "");
+  return text;
+}
+
+function normalizeForDedupe(input) {
+  return sanitizeText(input).toLowerCase().replace(/[^a-z0-9\s]/g, "").slice(0, 240);
+}
+
+function Section({ label, title, children }) {
+  const id = title ? `section-${String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : undefined;
+  return (
+    <section className="result-section" role="region" aria-labelledby={id ? id + "-heading" : undefined}>
+      <div className="section-heading">
+        <span>{label}</span>
+        <h3 id={id ? id + "-heading" : undefined}>{title}</h3>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function DataProfileChart({ stats }) {
+  const entries = Object.entries(stats || {}).filter(
+    ([, value]) => value && typeof value === "object"
+  );
+
+  if (!entries.length) {
+    return <div className="empty-panel">No numeric profile available.</div>;
+  }
+
+  const numericValues = entries.map(([name, value]) => {
+    const minimum = Number(value.minimum);
+    const maximum = Number(value.maximum);
+    const mean = Number(value.mean);
+    const median = Number(value.median);
+    const range = Number.isFinite(maximum) && Number.isFinite(minimum)
+      ? maximum - minimum
+      : 0;
+
+    return {
+      name,
+      minimum,
+      maximum,
+      mean,
+      median,
+      range,
+    };
+  });
+
+  return (
+    <div className="profile-chart">
+      <div className="chart-legend" aria-hidden="true">
+        <span><i className="legend-swatch legend-swatch--min"></i>Min</span>
+        <span><i className="legend-swatch legend-swatch--mean"></i>Mean</span>
+        <span><i className="legend-swatch legend-swatch--max"></i>Max</span>
+      </div>
+      <p className="chart-caption">Column-relative statistics, not directly comparable across different variables.</p>
+      <div className="profile-chart__body">
+        {numericValues.map(({ name, minimum, maximum, mean, median }) => {
+          const getPercent = (value) => {
+            if (!Number.isFinite(value) || !Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum === minimum) {
+              return 0;
+            }
+
+            return ((value - minimum) / (maximum - minimum || 1)) * 100;
+          };
+
+          return (
+            <div className="profile-column" key={name}>
+              <div className="profile-column__label">
+                <span>{name}</span>
+                <small>{formatNumber(mean, 2)}</small>
+              </div>
+              <div className="profile-bars" aria-label={`${name} metrics: min ${formatNumber(minimum)}, mean ${formatNumber(mean)}, max ${formatNumber(maximum)}`}>
+                <div className="profile-bar profile-bar--min" style={{ height: `${Math.max(getPercent(minimum), 8)}%` }}></div>
+                <div className="profile-bar profile-bar--mean" style={{ height: `${Math.max(getPercent(mean), 10)}%` }}></div>
+                <div className="profile-bar profile-bar--max" style={{ height: `${Math.max(getPercent(maximum), 12)}%` }}></div>
+              </div>
+              <div className="profile-column__meta">
+                <span>{formatNumber(minimum, 2)}</span>
+                <span>{formatNumber(median, 2)}</span>
+                <span>{formatNumber(maximum, 2)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CorrelationStrengthChart({ correlations }) {
+  const entries = Object.entries(correlations || {}).filter(([, value]) =>
+    Number.isFinite(Number(value))
+  );
+
+  if (!entries.length) {
+    return <div className="empty-panel">No correlations available for this dataset.</div>;
+  }
+
+  const maxAbsoluteValue = Math.max(
+    ...entries.map(([, value]) => Math.abs(Number(value))),
+    1
+  );
+
+  return (
+    <div className="relationship-visual">
+      {entries.map(([pair, value]) => {
+        const numericValue = Number(value);
+        const width = Math.max(Math.abs(numericValue) / maxAbsoluteValue * 100, 8);
+
+        return (
+          <div className="correlation-row" key={pair}>
+            <div className="correlation-row__label">
+              <span>{pair}</span>
+              <strong>{Number.isFinite(numericValue) ? numericValue.toFixed(3) : "Ã¢â‚¬â€"}</strong>
+            </div>
+            <div className="correlation-bar-track" aria-label={`${pair} correlation strength ${numericValue.toFixed(3)}`}>
+              <i className={numericValue >= 0 ? "positive" : "negative"} style={{ width: `${width}%` }}></i>
+            </div>
+            <small className={numericValue >= 0 ? "positive" : "negative"}>
+              {numericValue >= 0 ? "Positive" : "Negative"}
+            </small>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function App() {
+  const [task, setTask] = useState("");
+  const [file, setFile] = useState(null);
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [activity, setActivity] = useState([]);
+  const [selectedAgent, setSelectedAgent] = useState(null); // UI-only selected agent during task
+  const [showResult, setShowResult] = useState(false); // controls result reveal animation
+  const requestIdRef = useRef(0);
+
+  // Export / clipboard UI state
+  const [actionMessage, setActionMessage] = useState("");
+  const [actionError, setActionError] = useState(false);
+  const actionTimeoutRef = useRef(null);
+
+  // Accessibility live announcement for new results
+  const [ariaAnnouncement, setAriaAnnouncement] = useState("");
+
+  const flashAction = (message, isError = false) => {
+    if (actionTimeoutRef.current) {
+      clearTimeout(actionTimeoutRef.current);
+    }
+    setActionMessage(message);
+    setActionError(isError);
+    actionTimeoutRef.current = setTimeout(() => {
+      setActionMessage("");
+      setActionError(false);
+      actionTimeoutRef.current = null;
+    }, 3500);
+  };
+
+  useEffect(() => {
+    if (showResult) {
+      const agentName = result?.agent || "ORBIT";
+      // Defer setState to avoid synchronous state update inside effect
+      const announceTimer = setTimeout(() => setAriaAnnouncement(`${agentName} result is available.`), 0);
+      const clearTimer = setTimeout(() => setAriaAnnouncement(""), 3500);
+      const validatedSources = cleanedSources.filter(
+    (source) => source.articleValid && source.articleAvailable
+  );
+
+  const discoveredSources = cleanedSources.filter(
+    (source) => !(source.articleValid && source.articleAvailable)
+  );
+
+  return () => {
+        clearTimeout(announceTimer);
+        clearTimeout(clearTimer);
+      };
+    }
+    return undefined;
+  }, [showResult, result?.agent]);
+
+  const copyToClipboard = async (text) => {
+    try {
+      if (!navigator.clipboard) {
+        // Fallback
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
+      return true;
+    } catch (e) {
+      console.error("Clipboard copy failed", e);
+      return false;
+    }
+  };
+
+  const downloadFile = (filename, content, mime = "text/plain;charset=utf-8") => {
+    try {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (e) {
+      console.error("Download failed", e);
+      return false;
+    }
+  };
+
+  const buildResearchMarkdown = (res, cleanedSourcesArr) => {
+    const lines = [];
+    lines.push(`# Research Report`);
+    lines.push(``);
+    lines.push(`**Agent**: ${res.agent || "ORBIT"}`);
+    lines.push(`**Status**: ${formatStatus(res?.status || "completed").label}`);
+    if (res.message) lines.push(`**Note**: ${sanitizeText(res.message)}`);
+    lines.push(``);
+    lines.push(`## Findings`);
+    const bodyText = String(res.result || "").split(/\n+/).map((l) => sanitizeText(l)).filter(Boolean);
+    if (bodyText.length) {
+      bodyText.forEach((p) => lines.push(p + "\n"));
+    } else {
+      lines.push("No findings provided.");
+    }
+    lines.push(``);
+    if (cleanedSourcesArr && cleanedSourcesArr.length) {
+      lines.push(`## Validated Sources`);
+      cleanedSourcesArr.forEach((s, i) => {
+        lines.push(`### ${i + 1}. ${s.title}`);
+        if (s.domain) lines.push(`*Domain*: ${s.domain}`);
+        if (s.published) lines.push(`*Published*: ${s.published}`);
+        if (s.url) lines.push(`*URL*: ${s.url}`);
+        lines.push(``);
+        lines.push(s.summary || "No excerpt available.");
+        lines.push(``);
+      });
+    }
+    return lines.join("\n");
+  };
+
+  const handleCopyFindings = async () => {
+    const text = String(result?.result || "");
+    if (!text) {
+      flashAction("No findings to copy", true);
+      return;
+    }
+    const cleaned = String(text).split(/\n+/).map((l) => sanitizeText(l)).filter(Boolean).join("\n\n");
+    const ok = await copyToClipboard(cleaned);
+    if (ok) flashAction("Research findings copied"); else flashAction("Copy failed", true);
+  };
+
+  const handleCopySources = async () => {
+    if (!cleanedSources || !cleanedSources.length) {
+      flashAction("No sources to copy", true);
+      return;
+    }
+    const list = cleanedSources.map((s) => `${s.title}${s.url ? ` Ã¢â‚¬â€ ${s.url}` : ""}`).join("\n");
+    const ok = await copyToClipboard(list);
+    if (ok) flashAction("Source titles & URLs copied"); else flashAction("Copy failed", true);
+  };
+
+  const handleExportResearchMarkdown = () => {
+    const md = buildResearchMarkdown(result || {}, cleanedSources || []);
+    const ok = downloadFile(`research-report.md`, md, "text/markdown;charset=utf-8");
+    if (ok) flashAction("Research exported (Markdown)"); else flashAction("Export failed", true);
+  };
+
+  const handleExportDataJSON = () => {
+    const payload = {
+      dataset_overview: dataset?.dataset_overview || null,
+      column_types: columnTypes || null,
+      statistics: statistics || null,
+      correlations: correlations || null,
+      insights: insights || null,
+    };
+    const ok = downloadFile(`dataset.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    if (ok) flashAction("Data exported (JSON)"); else flashAction("Export failed", true);
+  };
+
+  const handleExportDataCSV = () => {
+    // Export numeric statistics table as CSV when available
+    const statsEntries = Object.entries(statistics || {});
+    if (!statsEntries.length) {
+      flashAction("No numeric statistics to export", true);
+      return;
+    }
+    const headers = ["column", "mean", "median", "minimum", "maximum", "std"];
+    const rows = [headers.join(",")];
+    statsEntries.forEach(([col, s]) => {
+      rows.push([
+        `"${col.replace(/"/g, '""') }"`,
+        s.mean ?? "",
+        s.median ?? "",
+        s.minimum ?? "",
+        s.maximum ?? "",
+        s.std ?? "",
+      ].join(","));
+    });
+    const csv = rows.join("\n");
+    const ok = downloadFile(`dataset-stats.csv`, csv, "text/csv;charset=utf-8");
+    if (ok) flashAction("Data exported (CSV)"); else flashAction("Export failed", true);
+  };
+
+  const handleExportMLJSON = () => {
+    const payload = {
+      prediction: prediction || null,
+      model_comparison: modelComparison || null,
+      best_model: result?.best_model || null,
+      metrics: result?.metrics || null,
+    };
+    const ok = downloadFile(`ml-result.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    if (ok) flashAction("ML result exported (JSON)"); else flashAction("Export failed", true);
+  };
+
+  const handleExportMLCSV = () => {
+    if (!modelComparison) {
+      flashAction("No model comparison data to export", true);
+      return;
+    }
+
+    const classification =
+      result?.task_type === "classification" ||
+      Object.values(modelComparison).some(
+        (metrics) =>
+          metrics &&
+          (metrics.accuracy !== undefined ||
+            metrics.precision !== undefined ||
+            metrics.recall !== undefined ||
+            metrics.f1_score !== undefined)
+      );
+
+    const headers = classification
+      ? ["model", "accuracy", "precision", "recall", "f1_score"]
+      : ["model", "r2_score", "mean_absolute_error"];
+
+    const rows = [headers.join(",")];
+
+    Object.entries(modelComparison).forEach(([name, metrics]) => {
+      const row = [`"${String(name).replace(/"/g, '""')}"`];
+
+      if (classification) {
+        row.push(
+          metrics?.accuracy ?? "",
+          metrics?.precision ?? "",
+          metrics?.recall ?? "",
+          metrics?.f1_score ?? ""
+        );
+      } else {
+        row.push(
+          metrics?.r2_score ?? "",
+          metrics?.mean_absolute_error ?? ""
+        );
+      }
+
+      rows.push(row.join(","));
+    });
+
+    const csv = rows.join("\n");
+    const ok = downloadFile(
+      classification
+        ? "classification-model-comparison.csv"
+        : "regression-model-comparison.csv",
+      csv,
+      "text/csv;charset=utf-8"
+    );
+
+    if (ok) flashAction("ML exported (CSV)");
+    else flashAction("Export failed", true);
+  };
+
+  const invalidateLatestRequest = () => {
+    requestIdRef.current += 1;
+  };
+
+  const runTask = async () => {
+    const trimmedTask = task.trim();
+
+    if (!trimmedTask) {
+      setError("Please enter a task.");
+      return;
+    }
+
+    const currentRequestId = requestIdRef.current + 1;
+    requestIdRef.current = currentRequestId;
+
+    setLoading(true);
+    setError("");
+    setResult(null);
+    setShowResult(false);
+    // Select likely agent for UI highlighting (UI-only). Data Agent when a file is provided.
+    setSelectedAgent(file ? "Data Agent" : null);
+    setActivity([
+      { text: "Task received", status: "done" },
+      { text: "Analyzing task and selecting agent", status: "active" },
+    ]);
+
+    try {
+      let response;
+
+      if (file) {
+        setActivity((previous) => [
+          ...previous.map((item) => ({ ...item, status: "done" })),
+          { text: "Dataset uploaded", status: "done" },
+          { text: "Running dataset analysis", status: "active" },
+        ]);
+
+        const formData = new FormData();
+        formData.append("task", trimmedTask);
+        formData.append("file", file);
+
+        response = await fetch(API_URL + "/analyze", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        setActivity((previous) => [
+          ...previous.map((item) => ({ ...item, status: "done" })),
+          { text: "Routing task to agent", status: "active" },
+        ]);
+
+        response = await fetch(API_URL + "/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task: trimmedTask }),
+        });
+      }
+
+      if (requestIdRef.current !== currentRequestId) {
+        return;
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      let data;
+
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        throw new Error(text || "Server returned an unexpected response.");
+      }
+
+      if (requestIdRef.current !== currentRequestId) {
+        return;
+      }
+
+      if (!response.ok || data?.status === "error") {
+        throw new Error(
+          data?.detail || data?.result || "The agent returned an error."
+        );
+      }
+
+      if (data?.status === "insufficient_data") {
+        setActivity((previous) => [
+          ...previous.map((item) => ({ ...item, status: "done" })),
+          {
+            text: "Insufficient data for model evaluation",
+            status: "error",
+          },
+        ]);
+        setSelectedAgent(data?.agent || selectedAgent);
+        setResult(data);
+        setTimeout(() => setShowResult(true), 80);
+        return;
+      }
+
+      setActivity((previous) => [
+        ...previous.map((item) => ({ ...item, status: "done" })),
+        { text: (data?.agent || "Agent") + " completed", status: "done" },
+        { text: "Result generated", status: "done" },
+      ]);
+      // Update selected agent to the actual executing agent if provided by API
+      setSelectedAgent(data?.agent || selectedAgent);
+      setResult(data);
+      // reveal result with a subtle animation
+      setTimeout(() => setShowResult(true), 80);
+    } catch (requestError) {
+      if (requestIdRef.current !== currentRequestId) {
+        return;
+      }
+
+      console.error("ORBIT request error:", requestError);
+      setActivity((previous) => [
+        ...previous.map((item) => ({ ...item, status: "done" })),
+        { text: "Task failed", status: "error" },
+      ]);
+      setError(
+        requestError?.message || "Unable to connect to ORBIT backend."
+      );
+    } finally {
+      if (requestIdRef.current === currentRequestId) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const clearTask = () => {
+    invalidateLatestRequest();
+    setTask("");
+    setFile(null);
+    setResult(null);
+    setError("");
+    setActivity([]);
+    setSelectedAgent(null);
+    setShowResult(false);
+  };
+
+  const handleFileChange = (event) => {
+    invalidateLatestRequest();
+    setFile(event.target.files?.[0] || null);
+    setResult(null);
+    setError("");
+    setActivity([]);
+    setSelectedAgent(event.target.files?.[0] ? "Data Agent" : null);
+    setShowResult(false);
+  };
+
+  const dataset = result?.dataset || null;
+  const prediction =
+    result?.prediction || result?.classification_prediction || null;
+  const modelComparison = result?.model_comparison || null;
+  const isDataAgent = result?.agent === "Data Agent" || Boolean(dataset);
+  const isMLAgent =
+    result?.agent === "ML Agent" ||
+    Boolean(prediction) ||
+    Boolean(modelComparison);
+  const isResearchAgent = result?.agent === "Research Agent";
+  const displayStatus = formatStatus(result?.status);
+  const routing = result?.routing || null;
+
+  const datasetOverview = dataset?.dataset_overview || {};
+  const columnTypes = dataset?.column_types || {};
+  const statistics = dataset?.statistics || {};
+  const missingValues = dataset?.missing_values || {};
+  const correlations = dataset?.correlations || {};
+  const insights = Array.isArray(result?.insights)
+    ? result.insights
+    : Array.isArray(dataset?.insights)
+      ? dataset.insights
+      : [];
+  const missingCount = Object.values(missingValues).reduce(
+    (total, count) => total + Number(count || 0),
+    0
+  );
+  const sources = Array.isArray(result?.sources) ? result.sources : [];
+
+// Produce a cleaned, deduplicated view of sources for presentation only (UI-only).
+const cleanedSources = (Array.isArray(sources) ? sources : [])
+  .filter((s) => s && (s.title || s.url || s.summary || s.description))
+  .map((s) => {
+    const cleanTitle = sanitizeText(s.title || "");
+    const cleanSummary = sanitizeText(s.summary || s.finding || s.description || "");
+    return {
+      _orig: s,
+      title: cleanTitle || s.title || "Untitled source",
+      summary: cleanSummary || "No excerpt available.",
+      domain: s.source || "Ã¢â‚¬â€",
+      published: s.published || "",
+      url: s.url || "",
+        articleValid: Boolean(s.article_valid),
+        articleAvailable: Boolean(s.article_available),
+        evidenceType: s.evidence_type || "",
+
+    };
+  })
+  .filter((s, i, arr) => {
+    // Deduplicate by normalized excerpt/title fingerprint
+    const key = normalizeForDedupe(s.summary || s.title || "");
+    if (!key) return true; // keep if no fingerprint
+    // first occurrence remains; drop later duplicates
+    return arr.findIndex((x) => normalizeForDedupe(x.summary || x.title || "") === key) === i;
+  });
+
+
+  return (
+    <div className="app">
+      <a href="#workspace" className="skip-link">Skip to workspace</a>
+      <header className="header" role="banner">
+        <div className="header-left">
+          <a className="brand" href="#top" aria-label="ORBIT home">
+            <span className="brand-mark">O</span>
+            <span>
+              <strong>ORBIT</strong>
+              <small>Multi-Agent AI Orchestration</small>
+            </span>
+          </a>
+        </div>
+
+        <div className="header-right">
+          <nav className="top-nav" aria-label="Primary navigation">
+            <a href="#workspace">Workspace</a>
+            <a href="#agents">Agents</a>
+            <a href="#results">Results</a>
+          </nav>
+        </div>
+      </header>
+
+      <main id="top" className="main">
+        <section className="hero">
+          <span className="eyebrow">INTELLIGENT AGENT PLATFORM</span>
+          <h1>Give ORBIT a task.<br />Let the agents do the work.</h1>
+          <p>
+            Route research, data analysis, and machine-learning tasks through
+            one focused AI workspace.
+          </p>
+        </section>
+
+        <section id="workspace" className="workspace">
+          <div className="workspace-heading">
+            <div>
+              <span className="eyebrow">TASK WORKSPACE</span>
+              <h2>Start with an outcome, not a tool.</h2>
+              <small className="auto-route-inline">Auto route Ã¢â‚¬â€ selects the right agent</small>
+            </div>
+          </div>
+
+          <div className="composer" role="region" aria-label="Task workspace" aria-busy={loading}>
+            <div className="composer-top">
+              <textarea
+                value={task}
+                onChange={(event) => setTask(event.target.value)}
+                placeholder="Describe the outcome you want (e.g., 'Summarize LLM research' or 'Analyze CSV data')"
+                disabled={loading}
+                aria-label="Task for ORBIT"
+              />
+            </div>
+
+            <div className="composer-footer">
+              <div className="composer-actions">
+                <label className="upload">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={handleFileChange}
+                    disabled={loading}
+                  />
+                  <span className="upload-icon" aria-hidden="true">+</span>
+                  <span className="upload-label">Upload CSV</span>
+                </label>
+                {file && (
+                  <span className="file-name" title={file.name}>
+                    <b>CSV</b>
+                    <span className="file-name-text">{file.name}</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="composer-actions composer-actions--right">
+                {(task || file || result) && !loading && (
+                  <button className="clear-button" onClick={clearTask} type="button">
+                    Clear
+                  </button>
+                )}
+                <button className="run-button" onClick={runTask} disabled={loading} type="button" aria-pressed={loading}>
+                  <span className="run-label">{loading ? "Running" : "Run Task"}</span>
+                  <span className="run-arrow">Ã¢â€ â€™</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="agents" className="agents-section">
+          <div className="section-heading section-heading--wide">
+            <div>
+              <span>ORBIT AGENTS</span>
+              <h3>Specialists, automatically coordinated.</h3>
+            </div>
+            <p>Every task is routed to the agent built for it.</p>
+          </div>
+          <nav className="agent-list" aria-label="Agents">
+            {agents.map(([name, icon, description]) => {
+              const isSelected = selectedAgent === name;
+              return (
+                <button className={"agent-item" + (isSelected ? ' agent-item--selected' : '')} key={name} type="button" aria-pressed={isSelected} onClick={() => setSelectedAgent(name)}>
+                  <span className="agent-item__icon" aria-hidden>{icon}</span>
+                  <div className="agent-item__meta">
+                    <strong>{name}</strong>
+                    <small>{description}</small>
+                  </div>
+                </button>
+              );
+            })}
+          </nav>
+        </section>
+
+        {error && (
+          <div className="error-banner" role="alert">
+            <span>!</span>
+            <div>
+              <strong>Task could not be completed</strong>
+              <p>{error}</p>
+            </div>
+          </div>
+        )}
+
+        {activity.length > 0 && (
+          <section className="activity-card">
+            <div className="section-heading section-heading--wide">
+              <div>
+                <span>TASK EXECUTION</span>
+                <h3>Agent activity</h3>
+              </div>
+              {loading && <span className="live-label">LIVE</span>}
+            </div>
+            <ol className="activity-list">
+              {activity.map((item, index) => (
+                <li className={"activity-item activity-item--" + item.status} key={item.text + "-" + index}>
+                  <span className="activity-marker" aria-hidden>{item.status === "done" ? "Ã¢Å“â€œ" : item.status === "active" ? "Ã¢â€”Â" : "!"}</span>
+                  <div className="activity-body">
+                    <div className="activity-text">{item.text}</div>
+                    <small className="activity-meta">
+                      {item.status === "active"
+                        ? "RUNNING"
+                        : item.status === "error"
+                          ? "ACTION NEEDED"
+                          : "DONE"}
+                    </small>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
+        {result && (
+          <section id="results" className={`results ${showResult ? 'results--visible' : ''}`}>
+            <div className="result-header">
+              <div className="result-header-left">
+                <div className="agent-avatar" aria-hidden>{(result.agent || "ORBIT").split(" ").map(s=>s[0]).slice(0,2).join("")}</div>
+                <div>
+                  <span className="eyebrow">AGENT RESULT</span>
+                  <h2>{result.agent || "ORBIT Agent"}</h2>
+{result.ai_provider && (
+  <div className="result-provider">
+    {result.ai_provider}{result.ai_model ? ` Â· ${result.ai_model}` : ""}
+  </div>
+)}
+                  {result.message && <p className="result-message">{result.message}</p>}
+                </div>
+              </div>
+              <div className="result-header-right">
+                <div className={"status-pill status-pill--" + displayStatus.tone}>
+                  <i aria-hidden></i>{displayStatus.label}
+                </div>
+                {/* Simplified execution badge (user-facing) Ã¢â‚¬â€ hide internal routing details */}
+                {routing && <div className="execution-compact"><strong>{routing.agent || result.agent || "ORBIT"}</strong><small>{routing.method === 'deterministic' ? 'Deterministic' : (routing.method ? String(routing.method) : 'Auto')}</small></div>}
+
+                <div className="result-actions" role="group" aria-label="Result actions">
+                  {/* Research actions */}
+                  {isResearchAgent && (
+                    <>
+                      <button className="action-btn" onClick={handleCopyFindings} title="Copy findings" type="button">Copy findings</button>
+                      <button className="action-btn" onClick={handleCopySources} title="Copy source titles and URLs" type="button">Copy sources</button>
+                      <button className="action-btn" onClick={handleExportResearchMarkdown} title="Export research as Markdown" type="button">Export MD</button>
+                    </>
+                  )}
+
+                  {/* Data actions */}
+                  {isDataAgent && (
+                    <>
+                      <button className="action-btn" onClick={handleExportDataJSON} title="Export dataset as JSON" type="button">Export JSON</button>
+                      <button className="action-btn" onClick={handleExportDataCSV} title="Export dataset statistics as CSV" type="button">Export CSV</button>
+                    </>
+                  )}
+
+                  {/* ML actions */}
+                  {isMLAgent && (
+                    <>
+                      <button className="action-btn" onClick={handleExportMLJSON} title="Export ML result as JSON" type="button">Export JSON</button>
+                      <button className="action-btn" onClick={handleExportMLCSV} title="Export model comparison as CSV" type="button">Export CSV</button>
+                    </>
+                  )}
+                </div>
+
+                {actionMessage && (
+                  <div className={"action-toast " + (actionError ? 'action-toast--error' : 'action-toast--success')} role="status" aria-live="polite">
+                    {actionMessage}
+                  </div>
+                )}
+
+                {/* Accessibility live region for result announcements (screen-reader only) */}
+                <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{ariaAnnouncement}</div>
+              </div>
+            </div>
+
+            {routing && (
+              <div className="execution-panel">
+                <div>
+                  <span>EXECUTION</span>
+                  <strong>{routing.agent || result.agent || "ORBIT"}</strong>
+                </div>
+                <div>
+                  <span>MODE</span>
+                  <strong>{routing.method === "deterministic" ? "Deterministic" : String(routing.method || "Auto")}</strong>
+                </div>
+              </div>
+            )}
+
+            {isDataAgent && (
+              <div className="result-content">
+                <Section label="DATASET OVERVIEW" title="At a glance">
+                  <div className="metric-grid">
+                    <Metric label="Rows" value={datasetOverview.rows ?? result?.analysis?.rows ?? "Ã¢â‚¬â€"} />
+                    <Metric label="Columns" value={datasetOverview.columns ?? result?.analysis?.columns ?? "Ã¢â‚¬â€"} />
+                    <Metric label="Missing values" value={missingCount} />
+                    <Metric label="Duplicate rows" value={dataset?.duplicate_rows ?? 0} />
+                  </div>
+                </Section>
+
+                <Section label="COLUMN TYPES" title="Schema">
+                  <div className="schema-grid">
+                    <div className="content-card">
+                      <span>NUMERIC</span>
+                      <div className="tag-list">
+                        {(columnTypes.numeric || []).map((column) => <b className="tag" key={column}>{column}</b>)}
+                        {!columnTypes.numeric?.length && <em>None detected</em>}
+                      </div>
+                    </div>
+                    <div className="content-card">
+                      <span>CATEGORICAL</span>
+                      <div className="tag-list">
+                        {(columnTypes.categorical || []).map((column) => <b className="tag tag--neutral" key={column}>{column}</b>)}
+                        {!columnTypes.categorical?.length && <em>None detected</em>}
+                      </div>
+                    </div>
+                  </div>
+                </Section>
+
+                {Object.keys(statistics).length > 0 && (
+                  <Section label="NUMERIC PROFILE" title="Statistics">
+                    <DataProfileChart stats={statistics} />
+                    <div className="statistics-grid">
+                      {Object.entries(statistics).map(([column, stats]) => (
+                        <article className="stat-card" key={column}>
+                          <h4>{column}</h4>
+                          <dl>
+                            <div><dt>Mean</dt><dd>{formatNumber(stats.mean)}</dd></div>
+                            <div><dt>Median</dt><dd>{formatNumber(stats.median)}</dd></div>
+                            <div><dt>Minimum</dt><dd>{formatNumber(stats.minimum)}</dd></div>
+                            <div><dt>Maximum</dt><dd>{formatNumber(stats.maximum)}</dd></div>
+                            <div><dt>Std. dev.</dt><dd>{formatNumber(stats.std)}</dd></div>
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+
+                <div className="split-sections">
+                  <Section label="DATA QUALITY" title="Completeness">
+                    <div className="quality-card">
+                      <span className={missingCount ? "quality-icon quality-icon--warning" : "quality-icon"}>{missingCount ? "!" : "Ã¢Å“â€œ"}</span>
+                      <div>
+                        <strong>{missingCount ? "Missing values found" : "No missing values detected"}</strong>
+                        <p>{missingCount ? "Review affected fields before modeling." : "The analyzed dataset has complete values."}</p>
+                      </div>
+                    </div>
+                    {missingCount > 0 && (
+                      <div className="missing-list">
+                        {Object.entries(missingValues).filter(([, count]) => Number(count) > 0).map(([column, count]) => (
+                          <div key={column}><span>{column}</span><strong>{count}</strong></div>
+                        ))}
+                      </div>
+                    )}
+                  </Section>
+
+                  {insights.length > 0 && (
+                    <Section label="LOCAL INSIGHTS" title="What stands out">
+                      <ul className="insight-list">
+                        {insights.map((insight, index) => <li key={String(index)}><span>Ã¢Å“Â¦</span>{insight}</li>)}
+                      </ul>
+                    </Section>
+                  )}
+                </div>
+
+                {Object.keys(correlations).length > 0 && (
+                  <Section label="RELATIONSHIPS" title="Correlation signals">
+                    <CorrelationStrengthChart correlations={correlations} />
+                  </Section>
+                )}
+
+                {result?.ml_recommendation?.task_type && (
+                  <Section label="ML RECOMMENDATION" title="Suggested next step">
+                    <div className="metric-grid">
+                      <Metric label="Task type" value={result.ml_recommendation.task_type} />
+                      <Metric label="Target" value={result.ml_recommendation.target || "Ã¢â‚¬â€"} />
+                      <Metric label="Features" value={Array.isArray(result.ml_recommendation.features) ? result.ml_recommendation.features.join(", ") : "Ã¢â‚¬â€"} />
+                    </div>
+                  </Section>
+                )}
+              </div>
+            )}
+
+            {isMLAgent && (
+              <div className="result-content">
+                {prediction && (
+                  <Section label="PREDICTION" title="Model output">
+                    <div className="prediction-card">
+                      <div>
+                        <span>
+                          {prediction.predicted_value !== undefined
+                            ? "PREDICTED VALUE"
+                            : "PREDICTED CLASS"}
+                        </span>
+                        <strong>
+                          {prediction.predicted_value !== undefined
+                            ? formatNumber(prediction.predicted_value)
+                            : prediction.predicted_class ?? "Ã¢â‚¬â€"}
+                        </strong>
+                        {result.best_model && (
+                          <p>Generated by {result.best_model}</p>
+                        )}
+                      </div>
+
+                      <div className="prediction-input">
+                        <span>INPUT VALUES</span>
+                        {Object.entries(prediction.input || {}).map(
+                          ([key, value]) => (
+                            <div key={key}>
+                              <b>{key}</b>
+                              <em>{value}</em>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+                )}
+
+                {modelComparison && (
+                  <>
+                    {(() => {
+                      const isClassification =
+                        result?.task_type === "classification" ||
+                        Object.values(modelComparison).some(
+                          (metrics) =>
+                            metrics &&
+                            (metrics.accuracy !== undefined ||
+                              metrics.precision !== undefined ||
+                              metrics.recall !== undefined ||
+                              metrics.f1_score !== undefined)
+                        );
+
+                      const isRegression = !isClassification;
+
+                      const bestMetrics =
+                        modelComparison?.[result?.best_model] ||
+                        modelComparison?.[Object.keys(modelComparison)[0]] ||
+                        {};
+
+                      return (
+                        <>
+                          <Section label="BEST MODEL" title="Top performer">
+                            <div className="best-model-hero">
+                              <div className="best-model-left">
+                                <h4>{result.best_model || "Ã¢â‚¬â€"}</h4>
+
+                                <div className="best-model-metrics">
+                                  {isClassification ? (
+                                    <>
+                                      <div>
+                                        <span>Accuracy</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.accuracy,
+                                            4
+                                          )}
+                                        </strong>
+                                      </div>
+                                      <div>
+                                        <span>Precision</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.precision,
+                                            4
+                                          )}
+                                        </strong>
+                                      </div>
+                                      <div>
+                                        <span>Recall</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.recall,
+                                            4
+                                          )}
+                                        </strong>
+                                      </div>
+                                      <div>
+                                        <span>F1 Score</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.f1_score,
+                                            4
+                                          )}
+                                        </strong>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div>
+                                        <span>RÃ‚Â²</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.r2_score,
+                                            4
+                                          )}
+                                        </strong>
+                                      </div>
+                                      <div>
+                                        <span>MAE</span>
+                                        <strong>
+                                          {formatNumber(
+                                            bestMetrics.mean_absolute_error,
+                                            2
+                                          )}
+                                        </strong>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="best-model-right">
+                                <div className="best-badge">Best</div>
+                                <p className="best-note">
+                                  Top model selected by evaluation metrics.
+                                </p>
+                              </div>
+                            </div>
+                          </Section>
+
+                          <Section label="MODEL PERFORMANCE" title="Comparison">
+                            <div className="model-performance">
+                              {Object.entries(modelComparison).map(
+                                ([name, metrics]) => {
+                                  const isBest = result.best_model === name;
+                                  const accuracy = Number(metrics?.accuracy);
+                                  const precision = Number(metrics?.precision);
+                                  const recall = Number(metrics?.recall);
+                                  const f1 = Number(metrics?.f1_score);
+                                  const r2 = Number(metrics?.r2_score);
+                                  const mae = metrics?.mean_absolute_error;
+
+                                  const performanceValue = isClassification
+                                    ? f1
+                                    : r2;
+
+                                  const clampedValue = Number.isFinite(
+                                    performanceValue
+                                  )
+                                    ? Math.max(
+                                        0,
+                                        Math.min(1, performanceValue)
+                                      )
+                                    : 0;
+
+                                  const width = `${clampedValue * 100}%`;
+
+                                  return (
+                                    <div
+                                      className={
+                                        "model-row" +
+                                        (isBest
+                                          ? " model-row--best"
+                                          : "")
+                                      }
+                                      key={name}
+                                    >
+                                      <div className="model-row__meta">
+                                        <strong className="model-name">
+                                          {name}
+                                        </strong>
+
+                                        <div className="model-stats">
+                                          {isClassification ? (
+                                            <>
+                                              <span className="model-metric">
+                                                Accuracy {Number.isFinite(accuracy) ? accuracy.toFixed(4) : "Ã¢â‚¬â€"}
+                                              </span>
+                                              <span className="model-metric">
+                                                Precision {Number.isFinite(precision) ? precision.toFixed(4) : "Ã¢â‚¬â€"}
+                                              </span>
+                                              <span className="model-metric">
+                                                Recall {Number.isFinite(recall) ? recall.toFixed(4) : "Ã¢â‚¬â€"}
+                                              </span>
+                                              <span className="model-metric">
+                                                F1 {Number.isFinite(f1) ? f1.toFixed(4) : "Ã¢â‚¬â€"}
+                                              </span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span className="model-r2">
+                                                RÃ‚Â² {Number.isFinite(r2) ? r2.toFixed(4) : "Ã¢â‚¬â€"}
+                                              </span>
+                                              <span className="model-mae">
+                                                MAE {mae !== undefined && mae !== null ? formatNumber(mae, 2) : "Ã¢â‚¬â€"}
+                                              </span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div
+                                        className="model-bar-track"
+                                        aria-hidden="true"
+                                      >
+                                        <div
+                                          className="model-bar"
+                                          style={{ width }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                              )}
+                            </div>
+
+                            <p className="model-explainer">
+                              {isClassification
+                                ? "Higher accuracy, precision, recall, and F1 score indicate stronger classification performance."
+                                : "RÃ‚Â² closer to 1 indicates stronger predictive performance. Lower MAE indicates smaller prediction error."}
+                            </p>
+                          </Section>
+
+                          {isClassification && result.class_distribution && (
+                            <Section
+                              label="CLASSIFICATION"
+                              title="Class distribution"
+                            >
+                              <div className="metric-grid">
+                                <Metric
+                                  label="Classes"
+                                  value={
+                                    Array.isArray(result.classes)
+                                      ? result.classes.join(", ")
+                                      : "Ã¢â‚¬â€"
+                                  }
+                                />
+                                <Metric
+                                  label="Class count"
+                                  value={
+                                    Array.isArray(result.classes)
+                                      ? result.classes.length
+                                      : "Ã¢â‚¬â€"
+                                  }
+                                />
+                                <Metric
+                                  label="Samples"
+                                  value={result.dataset_rows ?? "Ã¢â‚¬â€"}
+                                />
+                                <Metric
+                                  label="Best model"
+                                  value={result.best_model || "Ã¢â‚¬â€"}
+                                />
+                              </div>
+
+                              <div className="missing-list">
+                                {Object.entries(result.class_distribution).map(
+                                  ([className, count]) => (
+                                    <div key={className}>
+                                      <span>{className}</span>
+                                      <strong>{count}</strong>
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            </Section>
+                          )}
+
+                          <Section label="MODEL SETUP" title="Training summary">
+                            <div className="metric-grid">
+                              <Metric
+                                label="Task type"
+                                value={result.task_type || (isClassification ? "classification" : "regression")}
+                              />
+                              <Metric
+                                label="Target"
+                                value={result.target || "Ã¢â‚¬â€"}
+                              />
+                              <Metric
+                                label="Features"
+                                value={
+                                  Array.isArray(result.features)
+                                    ? result.features.join(", ")
+                                    : "Ã¢â‚¬â€"
+                                }
+                              />
+                              <Metric
+                                label="Dataset rows"
+                                value={result.dataset_rows ?? "Ã¢â‚¬â€"}
+                              />
+                              <Metric
+                                label="Training rows"
+                                value={
+                                  result.training_rows ??
+                                  result.train_rows ??
+                                  "Ã¢â‚¬â€"
+                                }
+                              />
+                              <Metric
+                                label="Testing rows"
+                                value={
+                                  result.testing_rows ??
+                                  result.test_rows ??
+                                  "Ã¢â‚¬â€"
+                                }
+                              />
+                              <Metric
+                                label="Best model"
+                                value={result.best_model || "Ã¢â‚¬â€"}
+                              />
+                            </div>
+                          </Section>
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
+            )}
+
+            {isResearchAgent && (
+              <div className="result-content research-panel">
+                <div className="research-main">
+                  <Section label="RESEARCH ANSWER" title="Findings">
+                    <article className="research-body" aria-label="Research findings">
+                      {String(result.result || "No research content was returned.")
+                        .split(/\n+/)
+                        .map((line) => sanitizeText(line))
+                        .filter((line) => line && !/^(skip to main content|table of contents|back to top)$/i.test(line))
+                        .map((line, index) => {
+                          if (!line) return <div className="research-spacer" key={"space-" + index}></div>;
+                          if (/^#{1,6}\s*/.test(line)) return <h4 key={"heading-" + index}>{line.replace(/^#{1,6}\s*/, "")}</h4>;
+                            if (/^([*-]\s+)/.test(line)) return <p className="research-bullet" key={"bullet-" + index}><span aria-hidden>Ã¢â‚¬Â¢</span>{line.replace(/^[-*]\s*/, "")}</p>;
+                          return <p key={"text-" + index}>{line}</p>;
+                        })}
+                    </article>
+                  </Section>
+
+                  {insights.length > 0 && (
+                    <Section label="LOCAL INSIGHTS" title="What stands out">
+                      <ul className="insight-list">
+                        {insights.map((insight, index) => <li key={String(index)}><span>Ã¢Å“Â¦</span>{insight}</li>)}
+                      </ul>
+                    </Section>
+                  )}
+                </div>
+
+                <aside className="research-side" aria-label="Research sources and metadata">
+                  <div className="validation-summary">
+                    <h4>Validation</h4>
+                        <div className="validation-grid">
+                        <div className="validation-item"><span>Sources reviewed</span><strong>{sources.length ?? 0}</strong></div>
+                        <div className="validation-item"><span>Grounding</span><strong>{getGroundingLabel(result.grounding)}</strong></div>
+                        <div className="validation-item"><span>Articles read</span><strong>{result.articles_read ?? "Ã¢â‚¬â€"}</strong></div>
+                      </div>
+                  </div>
+
+                  <div className="research-meta-cards">
+                   <div className="meta-card"><span>Selected Agent</span><strong>{result.agent || "ORBIT"}</strong></div>
+                   <div className="meta-card"><span>Status</span><strong>{displayStatus.label}</strong></div>
+                   <div className="meta-card"><span>Grounding</span><strong>{getGroundingLabel(result.grounding)}</strong></div>
+                  </div>
+
+                  {cleanedSources.length > 0 && (
+                    <div className="source-list">
+                      <h4 className="source-list-title">Sources reviewed</h4>
+                      <div className="source-grid">
+                        {cleanedSources.map((source, index) => (
+                          <article className="source-card" key={(source.url || source.title || "source") + index}>
+                            <div className="source-number">{String(index+1).padStart(2,'0')}</div>
+                            <div className="source-content">
+                              <h5 className="source-title">{source.title}</h5>
+                              <div className="source-excerpt">{source.summary}</div>
+                <div className="source-evidence-status">
+                  {source.articleValid && source.articleAvailable
+                    ? "? Validated article"
+                    : "? RSS metadata only"}
+                </div>
+                              <div className="source-foot">
+                                <span className="source-domain">{source.domain}</span>
+                                {source.published && <span className="source-date">{source.published}</span>}
+                                {source.url && <a className="source-link" href={source.url} target="_blank" rel="noreferrer" aria-label={`Open source ${source.title || index+1}`}>Open source <b>Ã¢â€ â€”</b></a>}
+                              </div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            )}
+
+            {!isDataAgent && !isMLAgent && !isResearchAgent && result.result && (
+              <Section label="RESULT" title="Response">
+                <div className="research-answer"><p>{result.result}</p></div>
+              </Section>
+            )}
+          </section>
+        )}
+      </main>
+
+      <footer>
+        <strong>ORBIT</strong>
+        <span>Multi-Agent AI Workspace</span>
+        <span>Research Ã‚Â· Data Ã‚Â· ML</span>
+      </footer>
+    </div>
+  );
+}
+
+export default App;
+
+
