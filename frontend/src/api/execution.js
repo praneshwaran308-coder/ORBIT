@@ -3,7 +3,11 @@
 // Uses the backend FastAPI server (default http://localhost:8000).
 // When VITE_USE_MOCK_EXECUTION=true, returns mock data for development.
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.MODE === 'production' ? '' : "http://localhost:8000");
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.MODE === 'production'
+    ? 'https://orbit-e8ce.onrender.com'
+    : 'http://localhost:8000');
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_EXECUTION === "true";
 
 /**
