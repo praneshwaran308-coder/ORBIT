@@ -8,6 +8,8 @@
   --color-surface-container: #182028; /* regular container */
   --color-surface-container-high: #222b33; /* higher container */
   --color-accent: #00a3a3; /* teal accent */
+  --color-on-surface: #dde2e9;
+  --color-on-surface-variant: #b5c2d1;
 
   /* Semantic colors */
   --color-success: #28a745;
