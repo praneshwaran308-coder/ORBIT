@@ -23,14 +23,15 @@ function App() {
           <Route path="/history/*" element={<AppShell />} />
           <Route path="/settings/*" element={<AppShell />} />
           {/* Public pages */}
-          <Route path="/" element={<PublicLayout><HomePage /></PublicLayout>} />
-          <Route path="/about" element={<PublicLayout><AboutPage /></PublicLayout>} />
-          <Route path="/faq" element={<PublicLayout><FaqPage /></PublicLayout>} />
-          <Route path="/contact" element={<PublicLayout><ContactPage /></PublicLayout>} />
-          <Route path="/waitlist" element={<PublicLayout><WaitlistPage /></PublicLayout>} />
-          <Route path="/thank-you" element={<PublicLayout><ThankYouPage /></PublicLayout>} />
-          {/* Catch‑all 404 */}
-          <Route path="*" element={<PublicLayout><NotFound /></PublicLayout>} />
+          <Route element={<PublicLayout />}>
+            <Route index element={<HomePage />} />
+            <Route path="about" element={<AboutPage />} />
+            <Route path="faq" element={<FaqPage />} />
+            <Route path="contact" element={<ContactPage />} />
+            <Route path="waitlist" element={<WaitlistPage />} />
+            <Route path="thank-you" element={<ThankYouPage />} />
+            <Route path="*" element={<NotFound />} />
+          </Route>
         </Routes>
       </BrowserRouter>
     </ExecutionProvider>
