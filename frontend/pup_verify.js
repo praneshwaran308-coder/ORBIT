@@ -1,9 +1,9 @@
-const puppeteer = require('puppeteer');
+import puppeteer from 'puppeteer';
 
 (async () => {
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
-  await page.goto('http://localhost:5175');
+  await page.goto('http://localhost:5173');
   await page.waitForSelector('.task-input', { timeout: 10000 });
   const task = 'Analyze how multi-agent AI systems can improve software development.';
   await page.type('.task-input', task);

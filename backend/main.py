@@ -152,6 +152,24 @@ async def get_status(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
+@app.post("/api/contact")
+async def contact(form: dict):
+    """Accept contact form submissions (name, email, message). No persistence; just echo success."""
+    # Basic validation
+    required = ["name", "email", "message"]
+    for field in required:
+        if not form.get(field):
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+    return {"status": "ok"}
+
+@app.post("/api/waitlist")
+async def waitlist(form: dict):
+    """Accept waitlist email submissions. No persistence; just echo success."""
+    email = form.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    return {"status": "ok"}
+
 
 # ============================================================
 # ANALYZE DATASET
