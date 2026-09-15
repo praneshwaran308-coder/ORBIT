@@ -156,7 +156,7 @@ function AppShell() {
         error={error}
         setTask={setTask}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1">
         <NavigationSidebar />
         <main className="flex-1 flex flex-col overflow-y-auto p-6 gap-6 bg-surface-container-lowest">
           {renderOperationStrip()}
@@ -194,7 +194,7 @@ function AppShell() {
                   <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shadow-[0_0_8px_rgba(172,199,255,0.6)]" />
                   <h2 className="font-headline-sm font-semibold truncate max-w-sm sm:max-w-md">{task || file?.name || 'Processing...'}</h2>
                 </div>
-                <span className="font-body-sm px-2 py-1 rounded bg-primary/10 text-primary border border-primary/20">Running</span>
+                <span className="font-body-sm px-2 py-1 rounded bg-primary/10 text-primary border border-primary/20">{loading ? 'Running' : (Object.keys(state.tasks)[0] && state.tasks[Object.keys(state.tasks)[0]].status) || 'Completed'}</span>
               </div>
               <div className="w-full bg-surface-container-highest h-1.5 rounded overflow-hidden mb-4">
                 <div className="bg-primary h-full transition-all duration-300" style={{ width: `${Math.min(100, activity.length * 25)}%` }} />
@@ -212,25 +212,43 @@ function AppShell() {
 
           <div className="flex-1 flex flex-col gap-4">
             <h3 className="font-headline-sm font-medium text-on-surface">Execution Graph</h3>
-            {Object.keys(state.tasks).length > 0 ? (
+            {Object.keys(state.tasks).length > 0 || state.history.length > 0 ? (
               <ExecutionGraph tasks={state.tasks} />
             ) : (
               renderEmptyState()
             )}
             {/* Result display */}
            {!loading && state.history[0] && (
-             <motion.div
-               initial={{ opacity: 0, scale: 0.95 }}
-               animate={{ opacity: 1, scale: 1 }}
-               transition={{ duration: 0.5 }}
-               className="mt-4"
-             >
-               <div className="bg-surface-container rounded-md p-6">
-                 <h3 className="font-headline-sm font-medium text-on-surface">Result</h3>
-                 <pre className="mt-2 text-on-surface bg-surface-container-low p-4 rounded">{state.history[0].result?.result || 'No result'}</pre>
-               </div>
-             </motion.div>
-           )}
+  <>
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.5 }}
+      className="mt-4"
+    >
+      <div className="bg-surface-container rounded-md p-6">
+        <h3 className="font-headline-sm font-medium text-on-surface">Result</h3>
+        <pre className="mt-2 text-on-surface bg-surface-container-low p-4 rounded whitespace-pre-wrap break-words">
+          {state.history[0].result?.result || 'No result'}
+        </pre>
+      </div>
+    </motion.div>
+    <ul className="mt-2 space-y-2">
+      {state.history.slice(1).map((h, idx) => (
+        <li key={idx} className="text-sm text-on-surface">
+          <div className="flex justify-between">
+            <span className="font-medium">{h.task || 'Task'}</span>
+            <span className="text-outline">{h.status}</span>
+          </div>
+          <div className="text-xs text-outline">{new Date(h.timestamp).toLocaleString()}</div>
+          <pre className="mt-1 whitespace-pre-wrap break-words bg-surface-container-low p-2 rounded">
+            {h.result?.result || ''}
+          </pre>
+        </li>
+      ))}
+    </ul>
+  </>
+)}
           </div>
         </main>
       </div>
