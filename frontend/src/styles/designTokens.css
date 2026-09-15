@@ -39,3 +39,6 @@
 .rounded-sm { @apply rounded-[var(--radius-sm)]; }
 .rounded-md { @apply rounded-[var(--radius-md)]; }
 .rounded-lg { @apply rounded-[var(--radius-lg)]; }
+/* Added utilities for public pages */
+.bg-background { @apply bg-[var(--color-bg-base)]; }
+.text-on-surface { @apply text-[var(--color-on-surface)]; }
