@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SEO from '../components/SEO';
+
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
 function ContactPage() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({ name: '', email: '', message: '' });
@@ -39,59 +41,59 @@ function ContactPage() {
   };
 
   return (
-    <div className= p-4 min-h-screen bg-background text-on-surface>
+    <div className='p-4 min-h-screen bg-background text-on-surface'>
       <SEO
-        title=Contact - ORBIT
-        description=Get in touch with the ORBIT team for support or inquiries.
+        title='Contact - ORBIT'
+        description='Get in touch with the ORBIT team for support or inquiries.'
         url={window.location.origin + '/contact'}
       />
-      <section className=max-w-2xl mx-auto>
-        <h1 className=text-3xl font-bold mb-4 text-primary>Contact Us</h1>
-        <p className=mb-4>We would love to hear from you. Please fill out the form below.</p>
-        <form className=space-y-4 onSubmit={handleSubmit}>
+      <section className='max-w-2xl mx-auto'>
+        <h1 className='text-3xl font-bold mb-4 text-primary'>Contact Us</h1>
+        <p className='mb-4'>We would love to hear from you. Please fill out the form below.</p>
+        <form className='space-y-4' onSubmit={handleSubmit}>
           <div>
-            <label htmlFor=name className=block text-sm font-medium text-on-surface>Name</label>
+            <label htmlFor='name' className='block text-sm font-medium text-on-surface'>Name</label>
             <input
-              id=name
-              type=text
+              id='name'
+              type='text'
               required
               value={formData.name}
               onChange={handleChange}
-              className=mt-1 block w-full border rounded p-2
-              placeholder=Your name
+              className='mt-1 block w-full border rounded p-2'
+              placeholder='Your name'
             />
           </div>
           <div>
-            <label htmlFor=email className=block text-sm font-medium text-on-surface>Email</label>
+            <label htmlFor='email' className='block text-sm font-medium text-on-surface'>Email</label>
             <input
-              id=email
-              type=email
+              id='email'
+              type='email'
               required
               value={formData.email}
               onChange={handleChange}
-              className=mt-1 block w-full border rounded p-2
-              placeholder=you@example.com
+              className='mt-1 block w-full border rounded p-2'
+              placeholder='you@example.com'
             />
           </div>
           <div>
-            <label htmlFor=message className=block text-sm font-medium text-on-surface>Message</label>
+            <label htmlFor='message' className='block text-sm font-medium text-on-surface'>Message</label>
             <textarea
-              id=message
+              id='message'
               rows={4}
               required
               value={formData.message}
               onChange={handleChange}
-              className=mt-1 block w-full border rounded p-2
-              placeholder=Your message
+              className='mt-1 block w-full border rounded p-2'
+              placeholder='Your message'
             />
           </div>
-          {status === 'error' && <p className=text-error>{error}</p>}
+          {status === 'error' && <p className='text-error'>{error}</p>}
           <button
-            type=submit
+            type='submit'
             disabled={status === 'loading'}
-            className=bg-primary text-on-primary px-4 py-2 rounded hover:bg-primary/80 transition
+            className='bg-primary text-on-primary px-4 py-2 rounded hover:bg-primary/80 transition'
           >
-            {status === 'loading' ? 'Sending…' : 'Send Message'}
+            {status === 'loading' ? 'Sending...' : 'Send Message'}
           </button>
         </form>
       </section>

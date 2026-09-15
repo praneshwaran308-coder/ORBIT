@@ -5,9 +5,11 @@ import ContactPage from './pages/ContactPage';
 import WaitlistPage from './pages/WaitlistPage';
 import ThankYouPage from './pages/ThankYouPage';
 import NotFound from './pages/NotFound';
+import HomePage from './pages/HomePage';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { ExecutionProvider } from './context/ExecutionContext';
 import AppShell from './components/AppShell';
+import PublicLayout from './components/PublicLayout';
 
 function App() {
   return (

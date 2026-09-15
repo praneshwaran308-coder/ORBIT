@@ -33,7 +33,7 @@ import puppeteer from 'puppeteer-core';
   });
 
   // Open frontend (vite dev server)
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5175';
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5175') + '/tasks';
   await page.goto(frontendUrl, { waitUntil: 'load' });
 
   // Locate task composer textarea (robust selector based on placeholder)
