@@ -15,7 +15,7 @@ function AboutPage() {
         url={window.location.origin + '/about'}
       />
       <section className="max-w-2xl mx-auto">
-      <img src="/assets/team.jpg" alt="ORBIT team photo" className="w-full h-auto mb-4 rounded"/>
+      
         <h1 className="text-3xl font-bold mb-4 text-primary">About ORBIT</h1>
         <p className="mb-4">ORBIT is a powerful AI orchestration platform that lets you build, run, and monitor automated workflows in a secure, scalable environment.</p>
         <p className="mb-4">The platform currently uses an in‑memory TaskRegistry. See the documentation for data isolation details.</p>
